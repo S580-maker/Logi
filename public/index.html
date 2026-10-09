@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LogiAuth · Learning Studio</title>
+  <link rel="stylesheet" href="./style.css?v=buddy-gaze-theme-1" />
+</head>
+<body>
+  <a class="skip-link" href="#dashboard-section">Skip to dashboard content</a>
+  <button class="theme-toggle dashboard-theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light mode" aria-pressed="false">
+    <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">☀</span>
+    <span id="theme-toggle-label">Light mode</span>
+  </button>
+  <main class="auth-panel">
+    <h1>⛨ LOGI·AUTH</h1>
+    <p class="subhead">A calmer, clearer way to make progress.</p>
+
+    <div class="auth-intro" id="auth-intro">
+      <span class="login-brand-mark" aria-hidden="true">L</span>
+      <p class="login-kicker">YOUR LEARNING STUDIO</p>
+      <h2>Welcome back</h2>
+      <p>Sign in to pick up where your learning left off.</p>
+    </div>
+
+    <div class="auth-art">
+      <button class="theme-toggle auth-theme-toggle" id="auth-theme-toggle" type="button" aria-label="Switch to light mode" aria-pressed="false">
+        <span class="theme-toggle-icon auth-theme-toggle-icon" aria-hidden="true">☀</span>
+        <span class="auth-theme-toggle-label">Light mode</span>
+      </button>
+      <span class="auth-art-shape auth-art-purple" aria-hidden="true"></span>
+      <span class="auth-art-shape auth-art-yellow" aria-hidden="true"></span>
+      <span class="auth-art-shape auth-art-orange" aria-hidden="true"></span>
+      <span class="auth-art-spark auth-art-spark-one" aria-hidden="true"></span>
+      <span class="auth-art-spark auth-art-spark-two" aria-hidden="true"></span>
+      <svg class="study-buddy" viewBox="0 0 180 190" role="img" aria-label="LogiAuth study buddy">
+        <ellipse class="buddy-shadow" cx="94" cy="176" rx="54" ry="9" />
+        <path class="buddy-body" d="M48 122c5-20 22-33 45-33s43 15 47 38l8 41H40l8-46Z" />
+        <path class="buddy-book" d="M61 143c12-7 23-6 34 1v28c-11-7-22-8-34-1v-28Zm34 1c11-7 22-8 34-1v28c-12-7-23-6-34 1v-28Z" />
+        <path class="buddy-book-line" d="M95 145v27" />
+        <g class="study-buddy-head">
+          <path class="buddy-ear" d="M52 57 45 31c-1-5 5-8 9-5l22 16m41 13 14-25c3-5 10-2 9 4l-3 31" />
+          <path class="buddy-head" d="M49 66c0-28 18-47 45-47s45 19 45 47c0 28-18 47-45 47S49 94 49 66Z" />
+          <ellipse class="buddy-cheek" cx="64" cy="80" rx="7" ry="4" />
+          <ellipse class="buddy-cheek" cx="124" cy="80" rx="7" ry="4" />
+          <ellipse class="buddy-eye-white" cx="77" cy="65" rx="7" ry="9" />
+          <ellipse class="buddy-eye-white" cx="110" cy="65" rx="7" ry="9" />
+          <circle class="buddy-pupil" cx="79" cy="66" r="3.7" />
+          <circle class="buddy-pupil" cx="112" cy="66" r="3.7" />
+          <path class="buddy-smile" d="M82 84c7 8 18 8 25 0" />
+          <path class="buddy-cover" d="M58 63c11-8 20-8 29 0m6 0c9-8 18-8 29 0" />
+        </g>
+        <g class="buddy-hands">
+          <path d="M57 66c0-8 6-13 13-13s13 5 13 13-6 12-13 12-13-4-13-12Zm35 0c0-8 6-13 13-13s13 5 13 13-6 12-13 12-13-4-13-12Z" />
+        </g>
+        <path class="buddy-arm buddy-arm-left" d="M49 117c-14 5-21 18-17 31" />
+        <path class="buddy-arm buddy-arm-right" d="M137 119c14 6 19 18 14 31" />
+        <circle class="buddy-paw buddy-paw-left" cx="34" cy="149" r="10" />
+        <circle class="buddy-paw buddy-paw-right" cx="151" cy="150" r="10" />
+      </svg>
+    </div>
+
+    <div id="message" class="message" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <div id="auth-mode-switch" class="auth-mode-switch hidden" role="tablist" aria-label="Choose an account action">
+      <span class="auth-mode-blade" aria-hidden="true"></span>
+      <button class="auth-mode-option is-active" id="login-tab" type="button" role="tab" tabindex="0" aria-selected="true" aria-controls="login-section">Sign in</button>
+      <button class="auth-mode-option" id="register-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="register-section">Create account</button>
+    </div>
+
+    <!-- Step 1: credentials -->
+    <section id="login-section" class="auth-form-panel" role="tabpanel" aria-labelledby="login-tab">
+      <form id="login-form">
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" autocomplete="username" minlength="3" maxlength="50" pattern="[A-Za-z0-9_]+" title="Use 3-50 letters, numbers, or underscores." aria-describedby="username-help" required />
+          <p class="field-help" id="username-help">Use 3-50 letters, numbers, or underscores.</p>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="password-input-wrap">
+            <input type="password" id="password" autocomplete="current-password" minlength="6" maxlength="128" aria-describedby="password-help" required />
+            <button class="password-toggle" type="button" aria-label="Show password" aria-pressed="false" aria-controls="password">Show</button>
+          </div>
+          <p class="field-help" id="password-help">At least 6 characters.</p>
+        </div>
+        <button class="btn" id="login-btn" type="submit">Sign in</button>
+      </form>
+    </section>
+
+    <section id="file-launch-help" class="file-launch-help hidden" aria-labelledby="file-launch-title">
+      <h2 id="file-launch-title">Start LogiAuth</h2>
+      <p>This page was opened directly as a file. LogiAuth needs its local server so login, slides, and study tools can work.</p>
+      <ol>
+        <li>Open the LogiAuth project folder.</li>
+        <li>Double-click <strong>Start-LogiAuth.bat</strong>.</li>
+        <li>Keep the server window open. It will open the app in your browser.</li>
+      </ol>
+      <a class="btn file-open-link" href="http://localhost:3000/">Open LogiAuth in browser</a>
+      <p class="file-launch-hint">If the link does not connect, start the app with the launcher first.</p>
+    </section>
+
+    <!-- Account registration -->
+    <section id="register-section" class="auth-form-panel hidden" role="tabpanel" aria-labelledby="register-tab">
+      <form id="register-form">
+        <div class="field">
+          <label for="register-username">Username</label>
+          <input type="text" id="register-username" autocomplete="username" minlength="3" maxlength="50" pattern="[A-Za-z0-9_]+" title="Use 3-50 letters, numbers, or underscores." aria-describedby="register-username-help" required />
+          <p class="field-help" id="register-username-help">Use 3-50 letters, numbers, or underscores.</p>
+        </div>
+        <div class="field">
+          <label for="register-email">Email</label>
+          <input type="email" id="register-email" autocomplete="email" maxlength="120" required />
+        </div>
+        <div class="field">
+          <label for="register-password">Password</label>
+          <div class="password-input-wrap">
+            <input type="password" id="register-password" autocomplete="new-password" minlength="6" maxlength="128" aria-describedby="register-password-help" required />
+            <button class="password-toggle" type="button" aria-label="Show password" aria-pressed="false" aria-controls="register-password">Show</button>
+          </div>
+          <p class="field-help" id="register-password-help">At least 6 characters.</p>
+        </div>
+        <button class="btn" id="register-btn" type="submit">Create account</button>
+      </form>
+    </section>
+
+    <!-- Step 2: 2FA -->
+    <section id="twofa-section" class="step hidden">
+      <div class="otp-header">
+        <h2 class="otp-title" id="otp-title">Verify your identity</h2>
+        <p class="otp-subtitle" id="otp-subtitle">Enter the 6-digit code sent to your email.</p>
+      </div>
+
+      <div class="otp-container" id="otp-container">
+        <div class="orbit-ring"></div>
+        <input class="slot" type="text" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="Verification code digit 1" />
+        <input class="slot" type="text" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Verification code digit 2" />
+        <input class="slot" type="text" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Verification code digit 3" />
+        <input class="slot" type="text" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Verification code digit 4" />
+        <input class="slot" type="text" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Verification code digit 5" />
+        <input class="slot" type="text" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Verification code digit 6" />
+        <div class="verified-tile">✓</div>
+      </div>
+
+      <button class="text-button otp-resend" id="resend-code-btn" type="button">Resend code</button>
+      <div class="row-gap" style="margin-top: 1.25rem;">
+        <button class="btn btn-secondary" id="back-btn" type="button">Back to sign in</button>
+      </div>
+    </section>
+
+    <!-- Step 3: dashboard -->
+    <section id="dashboard-section" class="dashboard hidden" tabindex="-1" aria-label="Dashboard content">
+      <header class="dashboard-header">
+        <div>
+          <p class="eyebrow" id="dashboard-eyebrow">LOGIAUTH WORKSPACE</p>
+          <h2 id="dashboard-title">Welcome, <span id="welcome-username"></span></h2>
+          <span class="role-badge" id="role-badge"></span>
+        </div>
+        <div class="header-actions">
+          <button class="small-button dashboard-ai-button hidden" id="dashboard-ask-gemini" type="button">✦ Ask Gemini</button>
+          <button class="small-button hidden" id="admin-users-btn" type="button">Manage users</button>
+          <button class="icon-button" id="refresh-dashboard-btn" type="button" aria-label="Refresh dashboard">↻</button>
+          <button class="btn btn-secondary logout-button" id="logout-btn" type="button">Log out</button>
+        </div>
+        <div class="dashboard-book" id="dashboard-book" aria-hidden="true">
+          <div class="book-spread">
+            <div class="book-page book-page-left">
+              <span class="book-page-mark"></span>
+              <span class="book-page-lines"></span>
+            </div>
+            <div class="book-page book-page-right">
+              <span class="book-page-lines"></span>
+            </div>
+            <div class="book-page book-page-turn">
+              <span class="book-page-lines"></span>
+              <span class="book-page-back-lines"></span>
+            </div>
+            <span class="book-spine"></span>
+          </div>
+          <span class="book-cover-edge"></span>
+        </div>
+      </header>
+
+      <section class="admin-monitor hidden" id="admin-monitor-section" aria-label="System monitoring overview">
+        <div class="stats-grid admin-stats-grid" id="admin-stats" aria-label="System statistics"></div>
+        <div class="admin-charts-grid">
+          <section class="dashboard-card admin-chart-card">
+            <div class="section-heading">
+              <div><p class="eyebrow">ACCOUNT GROWTH</p><h3>New accounts · last 7 days</h3></div>
+            </div>
+            <div class="admin-bar-chart" id="admin-registration-chart" aria-label="New accounts by day"></div>
+          </section>
+          <section class="dashboard-card admin-chart-card">
+            <div class="section-heading">
+              <div><p class="eyebrow">SYSTEM USAGE</p><h3>Slide uploads · last 7 days</h3></div>
+            </div>
+            <div class="admin-bar-chart" id="admin-upload-chart" aria-label="Slide uploads by day"></div>
+          </section>
+          <section class="dashboard-card admin-chart-card">
+            <div class="section-heading">
+              <div><p class="eyebrow">ACCOUNTS</p><h3>Users by role</h3></div>
+            </div>
+            <div class="admin-role-chart" id="admin-role-chart" aria-label="Accounts grouped by role"></div>
+          </section>
+          <section class="dashboard-card admin-chart-card">
+            <div class="section-heading">
+              <div><p class="eyebrow">CONTENT USAGE</p><h3>Most-used courses</h3></div>
+            </div>
+            <div class="admin-course-chart" id="admin-course-chart"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="dashboard-card admin-users-panel hidden" id="admin-users-panel" aria-labelledby="admin-users-heading">
+        <div class="section-heading admin-users-heading">
+          <div>
+            <p class="eyebrow">ADMINISTRATION</p>
+            <h3 id="admin-users-heading">Account activity</h3>
+            <p class="admin-users-help">Active accounts were seen in the app within the last five minutes. This view is read-only.</p>
+          </div>
+          <button class="small-button" id="refresh-admin-users-btn" type="button">Refresh users</button>
+        </div>
+        <label class="admin-user-search-label" for="admin-user-search">Search users</label>
+        <input class="admin-user-search" id="admin-user-search" type="search" autocomplete="off" placeholder="Search name, email, or role" />
+        <p class="admin-users-status" id="admin-users-status" role="status" aria-live="polite"></p>
+        <div class="admin-users-table-wrap" id="admin-users-table-wrap"></div>
+      </section>
+
+      <div class="stats-grid" id="dashboard-stats" aria-label="Workspace statistics"></div>
+
+      <section class="dashboard-card semester-card" aria-labelledby="semester-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">YOUR SEMESTER</p>
+            <h3 id="semester-heading">Build your exam-ready course plan</h3>
+          </div>
+          <span class="semester-course-count" id="semester-course-count">Set up your courses</span>
+        </div>
+        <p class="semester-intro">Tell your study coach what you are studying. Your selected courses and slide materials power focused, source-cited exam preparation.</p>
+        <form id="semester-form" class="semester-form">
+          <div class="semester-profile-fields">
+            <div class="field">
+              <label for="semester-program">Program of study</label>
+              <input id="semester-program" name="program" maxlength="120" placeholder="e.g. Computer Science" required />
+            </div>
+            <div class="field">
+              <label for="semester-name">Semester</label>
+              <input id="semester-name" name="semester" maxlength="80" placeholder="e.g. First semester 2026/27" />
+            </div>
+          </div>
+          <fieldset class="semester-course-fieldset">
+            <legend>Which courses are you taking this semester?</legend>
+            <p class="semester-course-help">Select a course from your library or type course names below (one per line). New names will be added to your library.</p>
+            <div class="semester-course-options" id="semester-course-options">
+              <p class="empty-state">Loading your courses…</p>
+            </div>
+            <label class="semester-custom-courses-label" for="semester-custom-courses">Add course names</label>
+            <textarea id="semester-custom-courses" class="semester-custom-courses" maxlength="2000" rows="3" placeholder="e.g. Computer Architecture&#10;Data Structures"></textarea>
+          </fieldset>
+          <div class="semester-form-footer">
+            <p id="semester-save-status" class="semester-save-status" role="status" aria-live="polite"></p>
+            <button class="small-button semester-save-button" id="semester-save-button" type="submit">Save semester plan</button>
+          </div>
+        </form>
+        <div class="semester-exam-list hidden" id="semester-exam-list"></div>
+      </section>
+
+      <div class="dashboard-grid">
+        <section class="dashboard-card chart-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">OVERVIEW</p>
+              <h3>Learning progress by course</h3>
+            </div>
+          </div>
+          <div id="course-chart" class="course-chart" role="img" aria-label="Slide counts by course"></div>
+        </section>
+
+        <section class="dashboard-card recent-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">LATEST ACTIVITY</p>
+              <h3>Recent uploads</h3>
+            </div>
+          </div>
+          <ul id="recent-uploads" class="recent-uploads"></ul>
+        </section>
+      </div>
+
+      <section class="dashboard-card coach-card">
+        <div class="coach-mark" aria-hidden="true">✦</div>
+        <div class="coach-content">
+          <p class="eyebrow">FILE-BASED STUDY INSIGHTS</p>
+          <div class="coach-heading-row">
+            <h3 id="coach-headline">Your personalized study plan</h3>
+            <button class="small-button hidden" id="retry-coach-btn" type="button">Retry insights</button>
+          </div>
+          <p class="coach-ai-hint">Gemini reads your selectable slide text to generate study insights and source citations. Use <strong>Ask Gemini</strong> for follow-up questions, explanations, and quizzes.</p>
+          <p class="coach-disclaimer" id="coach-status" role="status" aria-live="polite">Reading your slide content to build grounded suggestions. Your notes stay private.</p>
+          <ul id="study-suggestions" class="study-suggestions"></ul>
+        </div>
+      </section>
+
+      <section class="dashboard-card courses-card">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">YOUR LIBRARY</p>
+            <h3>Courses</h3>
+          </div>
+          <button class="btn add-course-button hidden" id="show-course-form-btn" type="button">+ Add course</button>
+        </div>
+
+        <form id="course-form" class="course-form hidden">
+          <div class="field">
+            <label for="course-title">Course title</label>
+            <input id="course-title" name="title" maxlength="120" required />
+          </div>
+          <div class="field">
+            <label for="course-description">Description</label>
+            <input id="course-description" name="description" maxlength="500" />
+          </div>
+          <div class="form-actions">
+            <button class="btn" id="create-course-btn" type="submit">Create course</button>
+            <button class="btn btn-secondary" id="cancel-course-btn" type="button">Cancel</button>
+          </div>
+        </form>
+        <div id="course-list" class="course-list"></div>
+      </section>
+
+      <div class="dashboard-footer">
+        <button class="btn btn-secondary hidden" id="backup-btn" type="button">Back up users to Supabase</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop hidden" id="modal-upload">
+    <section class="modal upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" tabindex="-1">
+      <header class="upload-header">
+        <div>
+          <p class="eyebrow">COURSE MATERIALS</p>
+          <h2 id="upload-title">Upload slides</h2>
+        </div>
+        <button class="icon-button" data-close-modal type="button" aria-label="Close upload dialog">×</button>
+      </header>
+      <p class="upload-subtitle">Add a PDF or PowerPoint file to your course library.</p>
+      <div class="upload-court" id="upload-court" aria-live="polite">
+        <div class="upload-projectile" id="upload-projectile" aria-hidden="true">
+          <span class="projectile-fold"></span>
+          <span class="projectile-type" id="projectile-type">PDF</span>
+        </div>
+        <button class="dropzone" id="dropzone" type="button">
+          <span class="file-info hidden" id="file-info">
+            <span class="file-icon" aria-hidden="true">▤</span>
+            <span class="file-details">
+              <span class="file-name" id="file-name"></span>
+              <span class="progress-bar-container" id="upload-progress-track" role="progressbar" aria-label="Upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="progress-bar-fill" id="upload-progress"></span></span>
+              <span class="file-meta"><span id="upload-status" role="status" aria-live="polite">Preparing upload…</span><span id="upload-percent">0%</span></span>
+            </span>
+          </span>
+          <span class="dropzone-prompt" id="dropzone-prompt">
+            <span class="prompt-icon" aria-hidden="true">↑</span>
+            <span>Choose a file or drop it here</span>
+            <span class="upload-hint">PDF, PPT, or PPTX · up to 25 MB</span>
+          </span>
+        </button>
+        <input type="file" id="slide-file-input" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" hidden />
+      </div>
+      <div class="upload-success hidden" id="upload-success" role="status" aria-live="polite">
+        <span class="upload-success-check" aria-hidden="true">✓</span>
+        <span class="upload-success-copy">
+          <strong>UPLOADED!</strong>
+          <span id="upload-success-detail"></span>
+        </span>
+        <button class="btn upload-done-button" id="upload-done-btn" type="button">Done</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modal-reader">
+    <section class="modal reader-modal" role="dialog" aria-modal="true" aria-labelledby="reader-title" tabindex="-1">
+      <header class="reader-header">
+        <div class="reader-title-wrap">
+          <p class="eyebrow">STUDY SPACE</p>
+          <h2 id="reader-title">Chapter</h2>
+        </div>
+        <button class="icon-button" id="close-reader-btn" type="button" aria-label="Close slide reader">×</button>
+      </header>
+      <div class="reader-layout">
+        <div class="reader-document" id="reader-document">
+          <div class="reader-page-toolbar" id="reader-page-toolbar">
+            <button class="small-button" id="reader-prev-page" type="button" disabled>Previous</button>
+            <span id="reader-page-count" aria-live="polite">Loading slide…</span>
+            <button class="small-button" id="reader-next-page" type="button" disabled>Next</button>
+          </div>
+          <div class="reader-page" id="reader-page">
+            <canvas id="slide-canvas" aria-label="Rendered slide page"></canvas>
+            <p class="reader-notice" id="reader-notice" role="status"></p>
+            <a class="small-button reader-download" id="reader-download" href="">Download original file</a>
+          </div>
+        </div>
+        <aside class="reader-notes">
+          <label for="slide-notes">Your private notes</label>
+          <p class="notes-hint">Capture questions, key ideas, or what to review next.</p>
+          <textarea id="slide-notes" maxlength="10000" placeholder="Write a note for this chapter…"></textarea>
+          <div class="notes-footer">
+            <span id="notes-count">0 / 10,000</span>
+            <button class="small-button" id="save-notes-btn" type="button">Save note</button>
+          </div>
+          <button class="progress-toggle reader-progress-btn" id="reader-complete-btn" type="button">Mark chapter complete</button>
+        </aside>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modal-coach">
+    <section class="modal coach-session-modal" role="dialog" aria-modal="true" aria-labelledby="coach-session-title" tabindex="-1">
+      <header class="reader-header">
+        <div class="reader-title-wrap">
+          <p class="eyebrow">PERSONAL STUDY SESSION</p>
+          <h2 id="coach-session-title">Your focus plan</h2>
+        </div>
+        <button class="icon-button" id="close-coach-btn" type="button" aria-label="Close study session">×</button>
+      </header>
+      <p class="coach-session-reason" id="coach-session-reason"></p>
+      <blockquote class="coach-session-evidence hidden" id="coach-session-evidence"></blockquote>
+      <ol class="coach-session-steps" id="coach-session-steps"></ol>
+      <label class="coach-response-label" for="coach-response">Try it from memory</label>
+      <p class="notes-hint">Write your answer before opening the slide. You can save this reflection to your private chapter notes.</p>
+      <textarea id="coach-response" class="coach-response" maxlength="5000" placeholder="Explain the idea in your own words…"></textarea>
+      <div class="coach-session-actions">
+        <button class="small-button" id="save-coach-response" type="button">Save reflection</button>
+        <button class="progress-toggle" id="open-coach-slide" type="button">Open chapter</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modal-notebook">
+    <section class="modal notebook-modal" role="dialog" aria-modal="true" aria-labelledby="notebook-title" tabindex="-1">
+      <header class="notebook-header">
+        <div>
+          <p class="eyebrow">SOURCE-GROUNDED STUDY SPACE</p>
+          <h2 id="notebook-title">Course notebook</h2>
+        </div>
+        <button class="icon-button" id="close-notebook-btn" type="button" aria-label="Close notebook">×</button>
+      </header>
+      <div class="notebook-layout">
+        <aside class="notebook-sources">
+          <div class="notebook-source-heading">
+            <div>
+              <h3>Sources</h3>
+              <p id="notebook-source-count">Choose the slides to ask about.</p>
+            </div>
+            <button class="text-button notebook-select-all" id="notebook-select-all" type="button">Select all</button>
+          </div>
+          <ul id="notebook-source-list" class="notebook-source-list"></ul>
+          <p class="notebook-privacy-note">Selected slide text is sent to Google Gemini to answer your questions. Your source files stay in this app.</p>
+        </aside>
+        <section class="notebook-chat" aria-label="Chat with course sources">
+          <div class="notebook-chat-heading">
+            <span class="notebook-ai-mark" aria-hidden="true">✦</span>
+            <div>
+              <h3>Ask your sources</h3>
+              <p id="notebook-status" role="status" aria-live="polite">Answers include citations that link back to a slide.</p>
+            </div>
+          </div>
+          <div class="notebook-prompts" id="notebook-prompts">
+            <button type="button" data-prompt="Summarize the key ideas in the selected sources.">Summarize key ideas</button>
+            <button type="button" data-prompt="Create a short study guide from the selected sources, with key terms and questions.">Make a study guide</button>
+            <button type="button" data-prompt="Quiz me on the most important concepts in the selected sources. Ask one question at a time.">Quiz me</button>
+          </div>
+          <div class="notebook-messages" id="notebook-messages" aria-live="polite"></div>
+          <form class="notebook-composer" id="notebook-form">
+            <label class="sr-only" for="notebook-question">Ask a question about your selected sources</label>
+            <textarea id="notebook-question" maxlength="2000" rows="2" placeholder="Ask a question about your sources…" required></textarea>
+            <button class="notebook-send" id="notebook-send-btn" type="submit" aria-label="Send question">↑</button>
+          </form>
+          <p class="notebook-footnote">AI can make mistakes. Check each answer against its source citations.</p>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <div class="app-loading" id="app-loading" role="status" aria-label="Loading" aria-live="polite" aria-hidden="true">
+    <div class="loading-card">
+      <span class="loading-book" aria-hidden="true"><span></span><span></span></span>
+    </div>
+  </div>
+  <div class="small-loading" id="small-loading" role="status" aria-live="polite" aria-label="Working">
+    <span class="small-loading-book" aria-hidden="true"><span></span><span></span></span>
+    <span class="sr-only">Working…</span>
+  </div>
+
+  <script src="./app.js?v=buddy-gaze-theme-1" defer></script>
+</body>
+</html>
