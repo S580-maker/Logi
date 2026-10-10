@@ -1,40 +1,10 @@
-const { createClient } = require('redis');
+const { getRedisClient } = require('./redis');
 
 const memoryCache = new Map();
 const CACHE_PREFIX = 'logiauth:';
 const CACHE_TTL_SECONDS = 30;
-let redisClient;
-let redisReady = false;
+const redisClient = getRedisClient();
 let redisWarningLogged = false;
-
-if (process.env.REDIS_URL) {
-  redisClient = createClient({
-    url: process.env.REDIS_URL,
-    socket: {
-      connectTimeout: 1200,
-      reconnectStrategy: false,
-    },
-  });
-  redisClient.on('error', (error) => {
-    redisReady = false;
-    if (!redisWarningLogged) {
-      console.warn(`Redis cache unavailable; using in-process cache: ${error.message}`);
-      redisWarningLogged = true;
-    }
-  });
-  redisClient.connect()
-    .then(() => {
-      redisReady = true;
-      console.log('Redis cache connected.');
-    })
-    .catch((error) => {
-      redisReady = false;
-      if (!redisWarningLogged) {
-        console.warn(`Redis cache unavailable; using in-process cache: ${error.message}`);
-        redisWarningLogged = true;
-      }
-    });
-}
 
 async function get(key) {
   const memoryEntry = memoryCache.get(key);
@@ -43,7 +13,7 @@ async function get(key) {
     memoryCache.delete(key);
   }
 
-  if (redisReady) {
+  if (redisClient?.isReady) {
     try {
       const value = await redisClient.get(CACHE_PREFIX + key);
       if (value !== null) {
@@ -52,8 +22,7 @@ async function get(key) {
         return parsed;
       }
     } catch (error) {
-      redisReady = false;
-      console.warn(`Redis cache read failed; using in-process cache: ${error.message}`);
+      logRedisFallback('read', error);
     }
   }
   return null;
@@ -68,12 +37,11 @@ async function set(key, value, ttlSeconds = CACHE_TTL_SECONDS) {
     }
   }
 
-  if (redisReady) {
+  if (redisClient?.isReady) {
     try {
       await redisClient.set(CACHE_PREFIX + key, JSON.stringify(value), { EX: ttlSeconds });
     } catch (error) {
-      redisReady = false;
-      console.warn(`Redis cache write failed; using in-process cache: ${error.message}`);
+      logRedisFallback('write', error);
     }
   }
 }
@@ -83,7 +51,7 @@ async function deletePrefix(prefix) {
     if (key.startsWith(prefix)) memoryCache.delete(key);
   }
 
-  if (redisReady) {
+  if (redisClient?.isReady) {
     try {
       let cursor = '0';
       do {
@@ -95,14 +63,21 @@ async function deletePrefix(prefix) {
         if (result.keys.length) await redisClient.del(result.keys);
       } while (cursor !== '0');
     } catch (error) {
-      redisReady = false;
-      console.warn(`Redis cache invalidation failed: ${error.message}`);
+      logRedisFallback('invalidation', error);
     }
   }
 }
 
 async function close() {
   if (redisClient?.isOpen) await redisClient.quit();
+}
+
+function logRedisFallback(operation, error) {
+  if (redisWarningLogged) return;
+  redisWarningLogged = true;
+  console.warn(
+    `Redis cache ${operation} failed; using in-process cache: ${error.code || error.name || 'unknown error'}.`
+  );
 }
 
 module.exports = { get, set, deletePrefix, close };

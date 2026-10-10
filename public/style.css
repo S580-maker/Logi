@@ -3304,3 +3304,103 @@ html[data-theme="dark"] body:not(.dashboard-page) .auth-art .auth-theme-toggle {
     min-width: 132px;
   }
 }
+
+html[data-theme="light"] {
+  --studio-page: #f7f0ff;
+  --studio-surface: #fff;
+  --studio-surface-soft: #fcf8ff;
+  --studio-surface-strong: #eee3ff;
+  --studio-ink: #241a35;
+  --studio-muted: #5e526c;
+  --studio-subtle: #756985;
+  --studio-line: #dfd0f3;
+  --studio-accent: #6423d0;
+  --studio-accent-strong: #4a168f;
+  --studio-accent-soft: #efe3ff;
+  --studio-highlight: #ffc928;
+  --studio-shadow: 0 24px 70px rgba(67, 35, 108, .14);
+}
+html[data-theme="light"] body {
+  background:
+    radial-gradient(ellipse at 8% 12%, rgba(137, 74, 224, .2), transparent 34%),
+    radial-gradient(ellipse at 92% 88%, rgba(255, 165, 73, .2), transparent 33%),
+    var(--studio-page);
+}
+html[data-theme="light"] body:not(.dashboard-page) #login-section .btn,
+html[data-theme="light"] body:not(.dashboard-page) #register-section .btn,
+html[data-theme="light"] body.dashboard-page .btn:not(.btn-secondary),
+html[data-theme="light"] body.dashboard-page .small-button:not(.small-button-muted),
+html[data-theme="light"] body.dashboard-page .dashboard-ai-button {
+  border-color: #5316b5;
+  background: #6423d0;
+  color: #fff;
+}
+html[data-theme="light"] body:not(.dashboard-page) #login-section .btn:hover,
+html[data-theme="light"] body:not(.dashboard-page) #register-section .btn:hover,
+html[data-theme="light"] body.dashboard-page .btn:not(.btn-secondary):hover,
+html[data-theme="light"] body.dashboard-page .small-button:not(.small-button-muted):hover,
+html[data-theme="light"] body.dashboard-page .dashboard-ai-button:hover {
+  border-color: #42108f;
+  background: #5218ae;
+  color: #fff;
+}
+html[data-theme="light"] body.dashboard-page .role-badge,
+html[data-theme="light"] body.dashboard-page .semester-course-count {
+  border-color: #c7a5ff;
+  background: #ead9ff;
+  color: #4a168f;
+}
+html[data-theme="light"] body.dashboard-page .stat-card:nth-child(3n + 1) {
+  border-color: #d1b5ff;
+  background: linear-gradient(145deg, #fff, #f1e6ff);
+}
+html[data-theme="light"] body.dashboard-page .stat-card:nth-child(3n + 2) {
+  border-color: #f0d27a;
+  background: linear-gradient(145deg, #fff, #fff4cc);
+}
+html[data-theme="light"] body.dashboard-page .stat-card:nth-child(3n) {
+  border-color: #f0b08b;
+  background: linear-gradient(145deg, #fff, #ffeadc);
+}
+html[data-theme="light"] body.dashboard-page .progress-toggle.is-complete {
+  border-color: #b994f0;
+  background: #ead9ff;
+  color: #4a168f;
+}
+html body.dashboard-page .session-actions {
+  margin-left: 1.25rem;
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--studio-line);
+}
+html body.dashboard-page .btn.logout-button {
+  min-height: 44px;
+  border-color: #b42332;
+  background: #b42332;
+  color: #fff;
+}
+html body.dashboard-page .btn.logout-button:hover {
+  border-color: #8f1c29;
+  background: #8f1c29;
+  color: #fff;
+}
+html[data-theme="light"] body.dashboard-page .btn.logout-button {
+  border-color: #b42332;
+  background: #b42332;
+  color: #fff;
+}
+html[data-theme="light"] body.dashboard-page .btn.logout-button:hover {
+  border-color: #8f1c29;
+  background: #8f1c29;
+  color: #fff;
+}
+@media (max-width: 760px) {
+  html body.dashboard-page .session-actions {
+    display: flex;
+    flex-basis: 100%;
+    justify-content: flex-end;
+    margin: .35rem 0 0;
+    padding: .65rem 0 0;
+    border-top: 1px solid var(--studio-line);
+    border-left: 0;
+  }
+}

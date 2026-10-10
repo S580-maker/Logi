@@ -343,7 +343,7 @@ router.post('/resend-2fa', async (req, res) => {
     }
     res.json({
       message: isRegistration
-        ? `Gmail accepted the new code email for ${pending.email}. Check Inbox, Spam, and All Mail.`
+        ? `Gmail accepted a new code email for ${pending.email}. Search Gmail for in:anywhere subject:"Your LogiAuth verification code" and use only the newest code.`
         : 'Gmail accepted the new code email. Check Inbox, Spam, and All Mail.',
       delivery: 'accepted',
       deliveryAddress: isRegistration ? pending.email : undefined,

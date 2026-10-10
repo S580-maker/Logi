@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const networkErrorMessage = location.protocol === 'file:'
-  ? 'This page was opened as a file. Run the app with npm start, then open http://localhost:3000.'
-  : 'Cannot reach the app server. Check that npm start is running and try again.';
+  ? 'Please open LogiAuth from its website address instead of opening a file on your device.'
+  : 'We couldn’t connect to LogiAuth. Check your internet connection and try again. If it keeps happening, refresh the page.';
 let messageTimer;
 let currentUser;
 let verificationPurpose = 'login';
@@ -292,8 +292,7 @@ window.fetch = (...args) => {
   const requestUrl = args[0] instanceof Request ? args[0].url : args[0];
   const method = (args[1]?.method || (args[0] instanceof Request ? args[0].method : 'GET')).toUpperCase();
   const pathname = new URL(requestUrl, location.href).pathname;
-  const isAuthentication = method === 'POST' &&
-    ['/api/auth/login', '/api/auth/verify-2fa'].includes(pathname);
+  const isAuthentication = method === 'POST' && pathname === '/api/auth/login';
   const isSlidePreviewRequest = pathname.endsWith('/view');
   const finishLoading = isAuthentication
     ? beginBookLoading()
@@ -1549,7 +1548,10 @@ $('register-form').addEventListener('submit', async (event) => {
       $('register-password').value = '';
       resetOtp();
       show2FA(data.deliveryAddress || data.email, 'registration');
-      showMessage(`Check the inbox for ${data.deliveryAddress || data.email} for the verification code.`, 'info');
+      showMessage(
+        `Gmail accepted a verification email for ${data.deliveryAddress || data.email}. Search Gmail for in:anywhere subject:"Your LogiAuth verification code" and use the newest code if you requested a resend.`,
+        'info'
+      );
       return;
     }
 
@@ -1628,17 +1630,20 @@ const verifyOtp = async () => {
 
     if (isRegistration) {
       clearTimeout(otpErrorTimer);
-      otpContainer.classList.remove('error', 'verify');
-      resetOtp();
-      otpSlots.forEach((slot) => { slot.disabled = false; });
-      showDashboard(data.user);
-      showMessage(
-        data.welcomeEmailSent
-          ? 'Email verified. Your account is ready, and you’re signed in. A welcome email is on its way.'
-          : 'Email verified. Your account is ready and you’re signed in, but we could not send the welcome email.',
-        data.welcomeEmailSent ? 'success' : 'info'
-      );
-      verificationPurpose = 'login';
+      otpContainer.classList.add('verify');
+      setTimeout(() => {
+        showDashboard(data.user);
+        otpContainer.classList.remove('verify');
+        resetOtp();
+        otpSlots.forEach((slot) => { slot.disabled = false; });
+        showMessage(
+          data.welcomeEmailSent
+            ? 'Email verified. Your account is ready, and you’re signed in. A welcome email is on its way.'
+            : 'Email verified. Your account is ready and you’re signed in, but we could not send the welcome email.',
+          data.welcomeEmailSent ? 'success' : 'info'
+        );
+        verificationPurpose = 'login';
+      }, 1500);
       return;
     }
 
@@ -2067,6 +2072,8 @@ $('backup-btn').addEventListener('click', async () => {
 
 /* --- Logout --- */
 $('logout-btn').addEventListener('click', async () => {
+  if (!window.confirm('Log out of LogiAuth? You can sign in again at any time.')) return;
+
   $('logout-btn').disabled = true;
   try {
     const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });

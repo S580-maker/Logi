@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LogiAuth · Learning Studio</title>
-  <link rel="stylesheet" href="./style.css?v=buddy-gaze-theme-1" />
+  <link rel="stylesheet" href="./style.css?v=logout-safety-2" />
 </head>
 <body>
   <a class="skip-link" href="#dashboard-section">Skip to dashboard content</a>
@@ -160,7 +160,9 @@
           <button class="small-button dashboard-ai-button hidden" id="dashboard-ask-gemini" type="button">✦ Ask Gemini</button>
           <button class="small-button hidden" id="admin-users-btn" type="button">Manage users</button>
           <button class="icon-button" id="refresh-dashboard-btn" type="button" aria-label="Refresh dashboard">↻</button>
-          <button class="btn btn-secondary logout-button" id="logout-btn" type="button">Log out</button>
+          <div class="session-actions">
+            <button class="btn logout-button" id="logout-btn" type="button">Log out</button>
+          </div>
         </div>
         <div class="dashboard-book" id="dashboard-book" aria-hidden="true">
           <div class="book-spread">
@@ -490,6 +492,6 @@
     <span class="sr-only">Working…</span>
   </div>
 
-  <script src="./app.js?v=buddy-gaze-theme-1" defer></script>
+  <script src="./app.js?v=logout-safety-1" defer></script>
 </body>
 </html>

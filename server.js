@@ -4,55 +4,67 @@ const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const path = require('path');
-
-const authRoutes   = require('./routes/auth');
-const backupRoutes = require('./routes/backup');
-const studyRoutes  = require('./routes/study');
+const { RedisStore } = require('connect-redis');
+const { connectRedis } = require('./utils/redis');
+const { validateProductionEnv } = require('./utils/validate-production-env');
 
 const app = express();
 
-// --- Security headers ---
-app.use(helmet());
+async function startServer() {
+  validateProductionEnv();
+  const redisClient = await connectRedis();
+  if (process.env.NODE_ENV === 'production' && !redisClient) {
+    throw new Error('REDIS_URL is required in production for shared sessions and rate limits.');
+  }
 
-// --- Body & cookie parsing ---
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
+  const authRoutes = require('./routes/auth');
+  const backupRoutes = require('./routes/backup');
+  const studyRoutes = require('./routes/study');
 
-// --- Sessions ---
-app.use(session({
-  name: 'logi.sid',
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 1000 * 60 * 60, // 1 hour
-  },
-}));
+  app.use(helmet());
+  app.use(express.json({ limit: '10kb' }));
+  app.use(express.urlencoded({ extended: false }));
+  app.use(cookieParser());
 
-// --- Static frontend ---
-app.use(express.static(path.join(__dirname, 'public'), {
-  etag: true,
-  maxAge: '5m',
-  setHeaders(res, filePath) {
-    if (path.extname(filePath) === '.html') res.setHeader('Cache-Control', 'no-cache');
-  },
-}));
+  app.use(session({
+    name: 'logi.sid',
+    secret: process.env.SESSION_SECRET,
+    ...(redisClient
+      ? { store: new RedisStore({ client: redisClient, prefix: 'logiauth:sess:' }) }
+      : {}),
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 1000 * 60 * 60,
+    },
+  }));
 
-// --- Routes ---
-app.use('/api/auth', authRoutes);
-app.use('/api/study', studyRoutes);
-app.use('/api', backupRoutes);
+  app.use(express.static(path.join(__dirname, 'public'), {
+    etag: true,
+    maxAge: '5m',
+    setHeaders(res, filePath) {
+      if (path.extname(filePath) === '.html') res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
 
-// --- Fallback ---
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public/index.html'));
-});
+  app.use('/api/auth', authRoutes);
+  app.use('/api/study', studyRoutes);
+  app.use('/api', backupRoutes);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ LogiAuth running at http://localhost:${PORT}`);
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/index.html'));
+  });
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`✅ LogiAuth running at http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error(`Could not start LogiAuth: ${error.code || error.message}`);
+  process.exitCode = 1;
 });
