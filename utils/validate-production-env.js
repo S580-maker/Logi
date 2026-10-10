@@ -1,27 +1,39 @@
 const REQUIRED_PRODUCTION_VALUES = [
-  'DATABASE_URL',
   'GMAIL_USER',
   'GMAIL_APP_PASSWORD',
   'PEPPER',
   'REDIS_URL',
   'SESSION_SECRET',
+  'SUPABASE_URL',
 ];
 
 function validateProductionEnv(env = process.env) {
   if (env.NODE_ENV !== 'production') return;
 
-  const missing = REQUIRED_PRODUCTION_VALUES.filter((name) => !env[name]?.trim());
+  const databaseUrl = env.DATABASE_URL || env.POSTGRES_PRISMA_URL || env.POSTGRES_URL;
+  const supabaseServiceKey = env.SUPABASE_SERVICE_KEY ||
+    env.SUPABASE_SERVICE_ROLE_KEY ||
+    env.SUPABASE_SECRET_KEY;
+  const missing = [
+    ...REQUIRED_PRODUCTION_VALUES.filter((name) => !env[name]?.trim()),
+    ...(!databaseUrl?.trim()
+      ? ['DATABASE_URL, POSTGRES_PRISMA_URL, or POSTGRES_URL']
+      : []),
+    ...(!supabaseServiceKey?.trim()
+      ? ['SUPABASE_SERVICE_KEY, SUPABASE_SERVICE_ROLE_KEY, or SUPABASE_SECRET_KEY']
+      : []),
+  ];
   const weak = ['PEPPER', 'SESSION_SECRET'].filter(
     (name) => env[name] && Buffer.byteLength(env[name], 'utf8') < 32
   );
   const invalidUrls = [];
 
-  if (env.DATABASE_URL) {
+  if (databaseUrl) {
     try {
-      const { protocol } = new URL(env.DATABASE_URL);
-      if (!['postgres:', 'postgresql:'].includes(protocol)) invalidUrls.push('DATABASE_URL');
+      const { protocol } = new URL(databaseUrl);
+      if (!['postgres:', 'postgresql:'].includes(protocol)) invalidUrls.push('DATABASE_URL/POSTGRES_URL');
     } catch {
-      invalidUrls.push('DATABASE_URL');
+      invalidUrls.push('DATABASE_URL/POSTGRES_URL');
     }
   }
   if (env.REDIS_URL) {

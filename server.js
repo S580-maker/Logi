@@ -10,7 +10,18 @@ const { validateProductionEnv } = require('./utils/validate-production-env');
 
 const app = express();
 
-async function startServer() {
+let startupError;
+
+app.use((req, res, next) => {
+  initializeApp.then(() => {
+    if (startupError) {
+      return res.status(503).json({ error: 'LogiAuth is temporarily unavailable. Please try again shortly.' });
+    }
+    next();
+  });
+});
+
+async function configureApp() {
   validateProductionEnv();
   const redisClient = await connectRedis();
   if (process.env.NODE_ENV === 'production' && !redisClient) {
@@ -57,14 +68,24 @@ async function startServer() {
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public/index.html'));
   });
+}
 
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`✅ LogiAuth running at http://localhost:${PORT}`);
+const initializeApp = configureApp().catch((error) => {
+  startupError = error;
+  console.error(`Could not initialize LogiAuth: ${error.code || error.message}`);
+});
+
+if (require.main === module) {
+  initializeApp.then(() => {
+    if (startupError) {
+      process.exitCode = 1;
+      return;
+    }
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      console.log(`✅ LogiAuth running at http://localhost:${PORT}`);
+    });
   });
 }
 
-startServer().catch((error) => {
-  console.error(`Could not start LogiAuth: ${error.code || error.message}`);
-  process.exitCode = 1;
-});
+module.exports = app;

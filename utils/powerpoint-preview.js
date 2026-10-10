@@ -1,10 +1,14 @@
 const { execFile } = require('child_process');
 const fs = require('fs');
+const os = require('node:os');
 const path = require('path');
 const { promisify } = require('util');
 
 const execFileAsync = promisify(execFile);
-const previewDir = path.join(__dirname, '..', 'storage', 'previews');
+const storageDir = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'logiauth-storage')
+  : path.join(__dirname, '..', 'storage');
+const previewDir = path.join(storageDir, 'previews');
 const converterScript = path.join(__dirname, 'convert-powerpoint.ps1');
 const conversionPromises = new Map();
 
@@ -27,7 +31,7 @@ async function convertPowerPoint(storageName) {
   const inFlight = conversionPromises.get(outputPath);
   if (inFlight) return inFlight;
 
-  const inputPath = path.join(__dirname, '..', 'storage', 'slides', path.basename(storageName));
+  const inputPath = path.join(storageDir, 'slides', path.basename(storageName));
   const conversion = (async () => {
     const temporaryPath = path.join(previewDir, `${path.basename(outputPath, '.pdf')}-${process.pid}-${Date.now()}.pdf`);
     try {

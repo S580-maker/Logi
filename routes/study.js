@@ -1,5 +1,6 @@
 ﻿const crypto = require('crypto');
 const fs = require('fs');
+const os = require('node:os');
 const path = require('path');
 const express = require('express');
 const multer = require('multer');
@@ -12,7 +13,10 @@ const { convertPowerPoint, removePowerPointPreview } = require('../utils/powerpo
 const { requireAuth, requireRole } = require('../middleware/validate');
 
 const router = express.Router();
-const uploadDir = path.join(__dirname, '..', 'storage', 'slides');
+const storageDir = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'logiauth-storage')
+  : path.join(__dirname, '..', 'storage');
+const uploadDir = path.join(storageDir, 'slides');
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const pdfjsAssets = {
   'pdf.mjs': require.resolve('pdfjs-dist/build/pdf.mjs'),
