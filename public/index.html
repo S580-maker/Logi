@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LogiAuth · Learning Studio</title>
   <link rel="stylesheet" href="./style.css?v=logout-safety-2" />
+  <link rel="stylesheet" href="./auth-security.css?v=1" />
 </head>
 <body>
   <a class="skip-link" href="#dashboard-section">Skip to dashboard content</a>
@@ -86,6 +87,8 @@
         </div>
         <button class="btn" id="login-btn" type="submit">Sign in</button>
       </form>
+      <p class="field-help">For the first 7 days after passkey setup, sign in with your password and an emailed code. After that, verifying your passkey starts another 7-day email-code period.</p>
+      <button class="text-button" id="forgot-password-btn" type="button">Forgot password?</button>
     </section>
 
     <section id="file-launch-help" class="file-launch-help hidden" aria-labelledby="file-launch-title">
@@ -120,6 +123,7 @@
           </div>
           <p class="field-help" id="register-password-help">At least 6 characters.</p>
         </div>
+        <p class="field-help">After verifying your email, you’ll set up a passkey for sign-in verification.</p>
         <button class="btn" id="register-btn" type="submit">Create account</button>
       </form>
     </section>
@@ -146,6 +150,45 @@
       <div class="row-gap" style="margin-top: 1.25rem;">
         <button class="btn btn-secondary" id="back-btn" type="button">Back to sign in</button>
       </div>
+      <form id="reset-password-form" class="hidden">
+        <div class="field">
+          <label for="reset-recovery-code">Saved recovery code</label>
+          <input type="text" id="reset-recovery-code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" required />
+          <p class="field-help">This is required in addition to the email code.</p>
+        </div>
+        <div class="field">
+          <label for="reset-new-password">New password</label>
+          <input type="password" id="reset-new-password" autocomplete="new-password" minlength="6" maxlength="128" required />
+        </div>
+        <div class="field">
+          <label for="reset-confirm-password">Confirm new password</label>
+          <input type="password" id="reset-confirm-password" autocomplete="new-password" minlength="6" maxlength="128" required />
+        </div>
+        <button class="text-button" id="reset-code-back-btn" type="button">Use a different code</button>
+        <button class="btn" id="reset-password-btn" type="submit">Reset password</button>
+      </form>
+    </section>
+
+    <section id="forgot-password-section" class="auth-form-panel hidden" aria-labelledby="forgot-password-title">
+      <h2 id="forgot-password-title">Reset your password</h2>
+      <p class="field-help">We’ll email a one-time code to the address on your account.</p>
+      <form id="forgot-password-form">
+        <div class="field">
+          <label for="forgot-email">Email</label>
+          <input type="email" id="forgot-email" autocomplete="email" maxlength="120" required />
+        </div>
+        <button class="btn" id="forgot-submit-btn" type="submit">Send reset code</button>
+      </form>
+      <button class="text-button" id="forgot-back-btn" type="button">Back to sign in</button>
+    </section>
+
+    <section id="passkey-section" class="step hidden" aria-labelledby="passkey-title">
+      <div class="otp-header">
+        <h2 class="otp-title" id="passkey-title">Verify with your passkey</h2>
+        <p class="otp-subtitle" id="passkey-subtitle">Use your device’s fingerprint, face, or screen lock to continue.</p>
+      </div>
+      <button class="btn" id="passkey-action-btn" type="button">Continue with passkey</button>
+      <button class="text-button" id="passkey-back-btn" type="button">Back to sign in</button>
     </section>
 
     <!-- Step 3: dashboard -->
@@ -329,6 +372,56 @@
         <div id="course-list" class="course-list"></div>
       </section>
 
+      <details class="dashboard-card account-security-menu">
+        <summary class="account-security-summary">
+          <span class="account-security-copy">
+            <span class="eyebrow">ACCOUNT SECURITY</span>
+            <strong>Recovery &amp; sign-in</strong>
+            <span class="field-help">Manage recovery codes and passkeys.</span>
+          </span>
+          <span class="account-security-toggle">Manage security</span>
+        </summary>
+        <div class="account-security-content">
+          <section class="recovery-codes-card" aria-labelledby="recovery-codes-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">ACCOUNT SECURITY</p>
+                <h3 id="recovery-codes-title">Password recovery codes</h3>
+                <p class="field-help">Password resets require both an emailed code and one unused recovery code. Save these somewhere private, separate from your email.</p>
+              </div>
+            </div>
+            <form id="recovery-codes-form" class="recovery-codes-form">
+              <div class="field">
+                <label for="recovery-codes-password">Confirm your password to generate or replace codes</label>
+                <input type="password" id="recovery-codes-password" autocomplete="current-password" minlength="6" maxlength="128" required />
+              </div>
+              <button class="small-button" id="generate-recovery-codes-btn" type="submit">Generate recovery codes</button>
+            </form>
+            <div id="recovery-codes-output" class="recovery-codes-output hidden" role="status" aria-live="polite">
+              <p id="recovery-codes-message"></p>
+              <ol id="recovery-codes-list" class="recovery-codes-list"></ol>
+              <button class="small-button" id="copy-recovery-codes-btn" type="button">Copy codes</button>
+            </div>
+          </section>
+          <section class="passkey-management-card" aria-labelledby="passkey-management-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">SIGN-IN SECURITY</p>
+                <h3 id="passkey-management-title">Your passkeys</h3>
+                <p class="field-help">Add a passkey on another trusted device so you have another way to complete sign-in.</p>
+              </div>
+            </div>
+            <form id="add-passkey-form" class="recovery-codes-form">
+              <div class="field">
+                <label for="add-passkey-password">Confirm your password to add a passkey</label>
+                <input type="password" id="add-passkey-password" autocomplete="current-password" minlength="6" maxlength="128" required />
+              </div>
+              <button class="small-button" id="add-passkey-btn" type="submit">Add another passkey</button>
+            </form>
+          </section>
+        </div>
+      </details>
+
       <div class="dashboard-footer">
         <button class="btn btn-secondary hidden" id="backup-btn" type="button">Back up users to Supabase</button>
       </div>
@@ -492,6 +585,6 @@
     <span class="sr-only">Working…</span>
   </div>
 
-  <script src="./app.js?v=logout-safety-1" defer></script>
+  <script src="./app.js?v=passkey-email-grace-4" defer></script>
 </body>
 </html>

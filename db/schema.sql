@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS passkey_email_grace_until TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
 
 -- Login attempts (for rate-limiting & auditing)
 CREATE TABLE IF NOT EXISTS login_attempts (
@@ -30,6 +32,32 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_attempts_ip   ON login_attempts(ip_address);
+
+CREATE TABLE IF NOT EXISTS passkey_credentials (
+    id            SERIAL PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id TEXT NOT NULL UNIQUE,
+    public_key    BYTEA NOT NULL,
+    counter       BIGINT NOT NULL DEFAULT 0,
+    transports    TEXT[] NOT NULL DEFAULT '{}',
+    device_type   TEXT NOT NULL,
+    backed_up     BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user
+    ON passkey_credentials(user_id);
+
+CREATE TABLE IF NOT EXISTS user_recovery_codes (
+    id         SERIAL PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL CHECK (length(code_hash) = 64),
+    used_at    TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_recovery_codes_user_unused
+    ON user_recovery_codes(user_id, used_at);
 
 -- Study dashboard and private slide uploads
 CREATE TABLE IF NOT EXISTS courses (

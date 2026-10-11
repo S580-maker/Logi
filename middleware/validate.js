@@ -1,4 +1,5 @@
 const validator = require('validator');
+const pool = require('../db/pool');
 
 /**
  * SQLi Layer 1: strict whitelist validation before touching DB.
@@ -50,7 +51,34 @@ function requireAuth(req, res, next) {
   if (!req.session.user) {
     return res.status(401).json({ error: 'Not authenticated.' });
   }
-  next();
+  if (!Number.isSafeInteger(req.session.authVersion)) {
+    return invalidateSession(req, res);
+  }
+
+  pool.query('SELECT auth_version FROM users WHERE id = $1', [req.session.user.id])
+    .then(({ rows }) => {
+      if (!rows[0] || Number(rows[0].auth_version) !== req.session.authVersion) {
+        return invalidateSession(req, res);
+      }
+      next();
+    })
+    .catch((error) => {
+      console.error('Could not validate the authenticated session:', error.message);
+      res.status(503).json({ error: 'Authentication is temporarily unavailable. Please try again.' });
+    });
+}
+
+function invalidateSession(req, res) {
+  req.session.destroy((error) => {
+    if (error) console.error('Could not invalidate an outdated session:', error.message);
+    res.clearCookie('logi.sid', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/',
+    });
+    res.status(401).json({ error: 'Your sign-in has expired. Please sign in again.' });
+  });
 }
 
 function requireRole(...roles) {

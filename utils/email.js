@@ -50,6 +50,38 @@ async function sendRegistrationCode(email, username, code) {
   return sendLoginCode(email, username, code);
 }
 
+async function sendPasswordResetCode(email, username, code) {
+  await sendToRecipient(email, {
+    subject: 'Reset your LogiAuth password',
+    text: `Hello ${username},\n\nYour LogiAuth password reset email code is ${code}. It expires in 10 minutes. You will also need one of your saved recovery codes to reset your password. If you did not request this, ignore this email and keep your recovery codes safe.`,
+    html: `<div style="font-family:Arial,sans-serif;color:#17191f"><p>Hello ${escapeHtml(username)},</p><p>Your LogiAuth password reset email code is:</p><p style="font-size:32px;font-weight:bold;letter-spacing:8px">${code}</p><p>This code expires in 10 minutes. To complete the reset, you must also enter one of your saved recovery codes. If you did not request this, ignore this email and keep your recovery codes safe.</p></div>`,
+  });
+}
+
+async function sendPasswordResetNotification(email, username) {
+  await sendToRecipient(email, {
+    subject: 'Your LogiAuth password was reset',
+    text: `Hello ${username},\n\nThe password for your LogiAuth account was reset. All existing passkeys and recovery codes were removed. You will need to sign in with the new password, set up a new passkey, and generate new recovery codes.\n\nIf you did not do this, secure your email account and contact support immediately.`,
+    html: `<div style="font-family:Arial,sans-serif;color:#17191f"><p>Hello ${escapeHtml(username)},</p><p>The password for your LogiAuth account was reset. All existing passkeys and recovery codes were removed.</p><p>You will need to sign in with the new password, set up a new passkey, and generate new recovery codes.</p><p>If you did not do this, secure your email account and contact support immediately.</p></div>`,
+  });
+}
+
+async function sendPasskeyAddedNotification(email, username) {
+  await sendToRecipient(email, {
+    subject: 'A passkey was added to your LogiAuth account',
+    text: `Hello ${username},\n\nA new passkey was added to your LogiAuth account. If you did not just add it, reset your LogiAuth password and secure your email account immediately.`,
+    html: `<div style="font-family:Arial,sans-serif;color:#17191f"><p>Hello ${escapeHtml(username)},</p><p>A new passkey was added to your LogiAuth account.</p><p>If you did not just add it, reset your LogiAuth password and secure your email account immediately.</p></div>`,
+  });
+}
+
+async function sendRecoveryCodesChangedNotification(email, username) {
+  await sendToRecipient(email, {
+    subject: 'Your LogiAuth recovery codes changed',
+    text: `Hello ${username},\n\nNew recovery codes were generated for your LogiAuth account. All previous recovery codes are now invalid. If you did not do this, reset your LogiAuth password and secure your email account immediately.`,
+    html: `<div style="font-family:Arial,sans-serif;color:#17191f"><p>Hello ${escapeHtml(username)},</p><p>New recovery codes were generated for your LogiAuth account. All previous recovery codes are now invalid.</p><p>If you did not do this, reset your LogiAuth password and secure your email account immediately.</p></div>`,
+  });
+}
+
 async function sendWelcomeEmail(email, username) {
   await sendToRecipient(email, {
     subject: 'Welcome to LogiAuth',
@@ -68,4 +100,12 @@ function escapeHtml(value) {
   })[character]);
 }
 
-module.exports = { sendLoginCode, sendRegistrationCode, sendWelcomeEmail };
+module.exports = {
+  sendLoginCode,
+  sendRegistrationCode,
+  sendPasswordResetCode,
+  sendPasswordResetNotification,
+  sendPasskeyAddedNotification,
+  sendRecoveryCodesChangedNotification,
+  sendWelcomeEmail,
+};

@@ -5,6 +5,7 @@ const REQUIRED_PRODUCTION_VALUES = [
   'REDIS_URL',
   'SESSION_SECRET',
   'SUPABASE_URL',
+  'DATABASE_CA_CERT_BASE64',
 ];
 
 function validateProductionEnv(env = process.env) {
@@ -27,6 +28,7 @@ function validateProductionEnv(env = process.env) {
     (name) => env[name] && Buffer.byteLength(env[name], 'utf8') < 32
   );
   const invalidUrls = [];
+  const invalidCertificates = [];
 
   if (databaseUrl) {
     try {
@@ -44,11 +46,19 @@ function validateProductionEnv(env = process.env) {
       invalidUrls.push('REDIS_URL');
     }
   }
+  if (env.DATABASE_CA_CERT_BASE64) {
+    const caCert = Buffer.from(env.DATABASE_CA_CERT_BASE64, 'base64').toString('utf8');
+    if (!caCert.startsWith('-----BEGIN CERTIFICATE-----') ||
+        !caCert.includes('-----END CERTIFICATE-----')) {
+      invalidCertificates.push('DATABASE_CA_CERT_BASE64');
+    }
+  }
 
   const problems = [
     ...(missing.length ? [`missing: ${missing.join(', ')}`] : []),
     ...(weak.length ? [`must be at least 32 bytes: ${weak.join(', ')}`] : []),
     ...(invalidUrls.length ? [`invalid URL: ${[...new Set(invalidUrls)].join(', ')}`] : []),
+    ...(invalidCertificates.length ? [`invalid certificate: ${invalidCertificates.join(', ')}`] : []),
   ];
 
   if (problems.length) {

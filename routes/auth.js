@@ -2,7 +2,21 @@ const express = require('express');
 const crypto = require('crypto');
 const dns = require('node:dns').promises;
 const pool = require('../db/pool');
-const { sendLoginCode, sendRegistrationCode, sendWelcomeEmail } = require('../utils/email');
+const {
+  sendLoginCode,
+  sendRegistrationCode,
+  sendPasswordResetCode,
+  sendPasswordResetNotification,
+  sendPasskeyAddedNotification,
+  sendRecoveryCodesChangedNotification,
+  sendWelcomeEmail,
+} = require('../utils/email');
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
+} = require('@simplewebauthn/server');
 const {
   hashPassword,
   verifyPassword,
@@ -14,10 +28,16 @@ const {
   requireAuth,
   requireRole,
 } = require('../middleware/validate');
-const { loginLimiter, registrationLimiter } = require('../middleware/rateLimit');
+const {
+  loginLimiter,
+  registrationLimiter,
+  passwordResetLimiter,
+  passkeyVerificationLimiter,
+} = require('../middleware/rateLimit');
 
 const router = express.Router();
 const OTP_TTL_MS = 5 * 60 * 1000;
+const PASSWORD_RESET_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
 
@@ -37,25 +57,106 @@ function maskEmail(email) {
   return `${name.slice(0, 1)}${'*'.repeat(Math.max(name.length - 1, 2))}@${domain}`;
 }
 
-async function issueLoginCode(user) {
-  const code = createOtp();
-  await sendLoginCode(user.email, user.username, code);
-  return {
+function getPasskeyContext(req) {
+  const origin = req.get('origin') || `${req.protocol}://${req.get('host')}`;
+  const parsedOrigin = new URL(origin);
+  if (!['https:', 'http:'].includes(parsedOrigin.protocol) ||
+      (process.env.NODE_ENV === 'production' && parsedOrigin.protocol !== 'https:')) {
+    throw new Error('Passkeys require a secure website connection.');
+  }
+  const rpID = process.env.PASSKEY_RP_ID?.trim().toLowerCase() || parsedOrigin.hostname;
+  if (parsedOrigin.hostname !== rpID && !parsedOrigin.hostname.endsWith(`.${rpID}`)) {
+    throw new Error('The passkey domain does not match this website.');
+  }
+  return { origin: parsedOrigin.origin, rpID };
+}
+
+async function createPasskeyEnrollmentOptions(user, req) {
+  const safeUser = {
     id: user.id,
     username: user.username,
-    role: user.role,
     email: user.email,
-    otpHash: hashOtp(code),
-    otpExpiresAt: Date.now() + OTP_TTL_MS,
-    otpAttempts: 0,
-    otpLastSentAt: Date.now(),
+    role: user.role,
+    authVersion: Number(user.authVersion ?? 0),
   };
+  const { origin, rpID } = getPasskeyContext(req);
+  const existing = await pool.query(
+    'SELECT credential_id, transports FROM passkey_credentials WHERE user_id = $1',
+    [user.id]
+  );
+  const options = await generateRegistrationOptions({
+    rpName: 'LogiAuth',
+    rpID,
+    userID: Buffer.from(String(safeUser.id)),
+    userName: safeUser.username,
+    userDisplayName: safeUser.username,
+    attestationType: 'none',
+    excludeCredentials: existing.rows.map((credential) => ({
+      id: credential.credential_id,
+      transports: credential.transports,
+    })),
+    authenticatorSelection: {
+      residentKey: 'required',
+      userVerification: 'required',
+    },
+  });
+  return {
+    options,
+    user: safeUser,
+    challenge: options.challenge,
+    origin,
+    rpID,
+    expiresAt: Date.now() + OTP_TTL_MS,
+  };
+}
+
+function regenerateSession(req) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 function otpMatches(expectedHash, code) {
   const actual = Buffer.from(hashOtp(code), 'hex');
   const expected = Buffer.from(expectedHash, 'hex');
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function normalizeRecoveryCode(code) {
+  return typeof code === 'string' ? code.replace(/[\s-]/g, '').toUpperCase() : '';
+}
+
+function hashRecoveryCode(code) {
+  return crypto
+    .createHmac('sha256', process.env.PEPPER || process.env.SESSION_SECRET)
+    .update(`logiauth-recovery:${normalizeRecoveryCode(code)}`)
+    .digest('hex');
+}
+
+function hashesMatch(actualHash, expectedHash) {
+  const actual = Buffer.from(actualHash, 'hex');
+  const expected = Buffer.from(expectedHash, 'hex');
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function createRecoveryCodes() {
+  return Array.from({ length: 10 }, () => {
+    const value = crypto.randomBytes(10).toString('hex').toUpperCase();
+    return value.match(/.{1,4}/g).join('-');
+  });
+}
+
+async function sendSecurityNotification(sendNotification, email, username, eventName) {
+  try {
+    await sendNotification(email, username);
+    return true;
+  } catch (error) {
+    console.error(`${eventName} security email failed:`, error.code || error.message);
+    return false;
+  }
 }
 
 async function emailDomainCanReceiveMail(domain) {
@@ -138,7 +239,6 @@ router.post('/register', registrationLimiter, validateRegistrationInput, async (
       otpAttempts: 0,
       otpLastSentAt: Date.now(),
     };
-    delete req.session.pendingUser;
     return res.json({
       step: 'email-verification',
       email: maskEmail(email),
@@ -180,27 +280,19 @@ router.post('/verify-registration', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO users (username, email, password_hash, salt, role, email_verified_at, last_login, last_activity_at)
-       VALUES ($1, $2, $3, $4, 'student', NOW(), NOW(), NOW())
-       RETURNING id, username, role`,
+      `INSERT INTO users (username, email, password_hash, salt, role, email_verified_at)
+       VALUES ($1, $2, $3, $4, 'student', NOW())
+       RETURNING id, username, email, role`,
       [pending.username, pending.email, pending.passwordHash, pending.salt]
     );
     const user = result.rows[0];
-    req.session.user = { id: user.id, username: user.username, role: user.role };
     delete req.session.pendingRegistration;
-
-    let welcomeEmailSent = true;
-    try {
-      await sendWelcomeEmail(pending.email, pending.username);
-    } catch (mailError) {
-      welcomeEmailSent = false;
-      console.error('Welcome email failed:', mailError.message);
-    }
+    const enrollment = await createPasskeyEnrollmentOptions(user, req);
+    req.session.pendingPasskeyEnrollment = enrollment;
 
     return res.status(201).json({
-      step: 'done',
-      user: req.session.user,
-      welcomeEmailSent,
+      step: 'passkey-enrollment',
+      options: enrollment.options,
     });
   } catch (err) {
     if (err.code === '23505') {
@@ -214,110 +306,591 @@ router.post('/verify-registration', async (req, res) => {
   }
 });
 
-/* ---------- STEP 1: username + password ---------- */
+/* ---------- Password + passkey sign-in ---------- */
 router.post('/login', loginLimiter, validateLoginInput, async (req, res) => {
   const { username, password } = req.body;
-  const ip = req.ip;
 
   try {
-    // SQLi Layer 2: parameterized query — NEVER concatenate strings
     const result = await pool.query(
-      'SELECT id, username, email, password_hash, role FROM users WHERE username = $1',
+      'SELECT id, username, email, password_hash, role, passkey_email_grace_until, auth_version FROM users WHERE username = $1',
       [username]
     );
-
     const user = result.rows[0];
 
-    // Log attempt (audit trail)
-    await pool.query(
-      'INSERT INTO login_attempts (username, ip_address, success) VALUES ($1, $2, $3)',
-      [username, ip, !!user]
-    );
-
     if (!user) {
+      await pool.query(
+        'INSERT INTO login_attempts (username, ip_address, success) VALUES ($1, $2, FALSE)',
+        [username, req.ip]
+      );
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
     const ok = await verifyPassword(password, user.password_hash);
     if (!ok) {
+      await pool.query(
+        'INSERT INTO login_attempts (username, ip_address, success) VALUES ($1, $2, FALSE)',
+        [username, req.ip]
+      );
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
-    try {
-      req.session.pendingUser = await issueLoginCode(user);
-      delete req.session.pendingRegistration;
-    } catch (mailError) {
-      console.error('Login code email failed:', mailError.code || mailError.message);
-      const rejected = mailError.code === 'ERECIPIENTREJECTED';
-      return res.status(503).json({
-          error: rejected
-            ? 'Gmail rejected that recipient address. Check for typos or contact support.'
-            : 'Could not send a verification code. Check the email server configuration and try again.',
+    const account = {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      authVersion: Number(user.auth_version),
+    };
+    delete req.session.pendingRegistration;
+    delete req.session.pendingPasswordReset;
+    delete req.session.pendingPasskeyEmailVerification;
+
+    if (req.cookies?.['logi.trusted']) {
+      res.clearCookie('logi.trusted', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
       });
     }
 
-    return res.json({
-      step: '2fa',
-      email: maskEmail(user.email),
-      expiresIn: OTP_TTL_MS / 1000,
+    const credentials = await pool.query(
+      'SELECT credential_id, public_key, counter, transports FROM passkey_credentials WHERE user_id = $1',
+      [user.id]
+    );
+
+    if (!credentials.rowCount) {
+      const enrollment = await createPasskeyEnrollmentOptions(account, req);
+      req.session.pendingPasskeyEnrollment = enrollment;
+      return res.json({ step: 'passkey-enrollment', options: enrollment.options });
+    }
+
+    if (user.passkey_email_grace_until && new Date(user.passkey_email_grace_until).getTime() > Date.now()) {
+      const code = createOtp();
+      try {
+        await sendLoginCode(user.email, user.username, code);
+      } catch (mailError) {
+        console.error('Login verification email failed:', mailError.code || mailError.message);
+        return res.status(503).json({
+          error: 'Could not send a sign-in code. Check your email configuration and try again.',
+        });
+      }
+      req.session.pendingPasskeyEmailVerification = {
+        user: account,
+        otpHash: hashOtp(code),
+        otpExpiresAt: Date.now() + OTP_TTL_MS,
+        otpAttempts: 0,
+        otpLastSentAt: Date.now(),
+      };
+      return res.json({
+        step: 'passkey-email-verification',
+        email: maskEmail(user.email),
+      });
+    }
+
+    const { origin, rpID } = getPasskeyContext(req);
+    const options = await generateAuthenticationOptions({
+      rpID,
+      allowCredentials: credentials.rows.map((credential) => ({
+        id: credential.credential_id,
+        transports: credential.transports,
+      })),
+      userVerification: 'required',
     });
+    req.session.pendingPasskeyAuthentication = {
+      user: account,
+      challenge: options.challenge,
+      origin,
+      rpID,
+      expiresAt: Date.now() + OTP_TTL_MS,
+    };
+    return res.json({ step: 'passkey-authentication', options });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error.' });
+    console.error('Could not start passkey sign-in:', err.code || err.message);
+    res.status(500).json({ error: 'Could not start sign-in. Please try again.' });
   }
 });
 
-/* ---------- STEP 2: 2FA verification ---------- */
-router.post('/verify-2fa', async (req, res) => {
-  const { token } = req.body;
-  const pending = req.session.pendingUser;
-
-  if (!pending) {
-    return res.status(400).json({ error: 'No pending login.' });
+router.post('/verify-login-email-code', passkeyVerificationLimiter, async (req, res) => {
+  const pending = req.session.pendingPasskeyEmailVerification;
+  const { token } = req.body || {};
+  if (!pending) return res.status(400).json({ error: 'No sign-in code is waiting to be verified.' });
+  if (Date.now() > pending.otpExpiresAt) {
+    delete req.session.pendingPasskeyEmailVerification;
+    return res.status(401).json({ error: 'That sign-in code has expired. Enter your password to request a new one.' });
   }
-  if (!token || !/^\d{6}$/.test(token)) {
-    return res.status(400).json({ error: 'Invalid code format.' });
+  if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
+    delete req.session.pendingPasskeyEmailVerification;
+    return res.status(429).json({ error: 'Too many incorrect codes. Enter your password to request a new one.' });
+  }
+  if (typeof token !== 'string' || !/^\d{6}$/.test(token) || !otpMatches(pending.otpHash, token)) {
+    pending.otpAttempts += 1;
+    return res.status(401).json({ error: 'Invalid sign-in code.' });
   }
 
   try {
-    if (Date.now() > pending.otpExpiresAt) {
-      delete req.session.pendingUser;
-      return res.status(401).json({ error: 'Code expired. Log in again to receive a new code.' });
+    const activeWindow = await pool.query(
+      `SELECT auth_version
+       FROM users
+       WHERE id = $1 AND passkey_email_grace_until > NOW()
+         AND EXISTS (
+           SELECT 1 FROM passkey_credentials WHERE user_id = users.id
+         )`,
+      [pending.user.id]
+    );
+    if (!activeWindow.rowCount) {
+      delete req.session.pendingPasskeyEmailVerification;
+      return res.status(401).json({
+        error: 'The 7-day email sign-in period has ended. Sign in again to verify your passkey.',
+      });
     }
-    if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
-      delete req.session.pendingUser;
-      return res.status(429).json({ error: 'Too many incorrect codes. Log in again to receive a new code.' });
-    }
-    if (!otpMatches(pending.otpHash, token)) {
-      pending.otpAttempts += 1;
-      return res.status(401).json({ error: 'Invalid 2FA code.' });
-    }
-
-    req.session.user = {
-      id: pending.id,
-      username: pending.username,
-      role: pending.role,
-    };
-    delete req.session.pendingUser;
-    delete req.session.pendingRegistration;
-
     await pool.query(
       'UPDATE users SET last_login = NOW(), last_activity_at = NOW() WHERE id = $1',
-      [pending.id]
+      [pending.user.id]
     );
-
-    res.json({ step: 'done', user: req.session.user });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error.' });
+    await pool.query(
+      'INSERT INTO login_attempts (username, ip_address, success) VALUES ($1, $2, TRUE)',
+      [pending.user.username, req.ip]
+    );
+    await regenerateSession(req);
+    req.session.user = {
+      id: pending.user.id,
+      username: pending.user.username,
+      role: pending.user.role,
+    };
+    req.session.authVersion = Number(activeWindow.rows[0].auth_version);
+    delete req.session.pendingPasskeyEmailVerification;
+    return res.json({ user: req.session.user });
+  } catch (error) {
+    console.error('Email-code sign-in failed:', error.message);
+    return res.status(500).json({ error: 'Could not finish sign-in. Please try again.' });
   }
 });
 
-/* ---------- Resend email verification code ---------- */
-router.post('/resend-2fa', async (req, res) => {
-  const pending = req.session.pendingRegistration || req.session.pendingUser;
-  if (!pending) return res.status(400).json({ error: 'No pending login.' });
+/* ---------- Passkey enrollment and second-factor sign-in ---------- */
+router.post('/passkey/add/options', requireAuth, passkeyVerificationLimiter, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, username, email, role, password_hash FROM users WHERE id = $1',
+      [req.session.user.id]
+    );
+    const user = result.rows[0];
+    if (!user) return res.status(401).json({ error: 'Sign in again before adding a passkey.' });
+    if (typeof req.body?.password !== 'string' ||
+        !(await verifyPassword(req.body.password, user.password_hash))) {
+      return res.status(401).json({ error: 'The password is incorrect. No passkey was added.' });
+    }
+    const enrollment = await createPasskeyEnrollmentOptions(user, req);
+    delete req.session.pendingPasskeyEnrollment;
+    req.session.pendingPasskeyAddition = enrollment;
+    return res.json({ options: enrollment.options });
+  } catch (error) {
+    console.error('Could not start passkey addition:', error.message);
+    return res.status(500).json({ error: 'Could not start adding a passkey. Please try again.' });
+  }
+});
+
+router.post('/passkey/register/verify', passkeyVerificationLimiter, async (req, res) => {
+  const isAddition = Boolean(req.session.pendingPasskeyAddition);
+  const pending = req.session.pendingPasskeyAddition || req.session.pendingPasskeyEnrollment;
+  const response = req.body?.credential;
+  if (!pending) return res.status(400).json({ error: 'No passkey setup is waiting.' });
+  if (isAddition && req.session.user?.id !== pending.user.id) {
+    delete req.session.pendingPasskeyAddition;
+    return res.status(401).json({ error: 'Sign in again before adding a passkey.' });
+  }
+  if (Date.now() > pending.expiresAt) {
+    delete req.session.pendingPasskeyEnrollment;
+    delete req.session.pendingPasskeyAddition;
+    return res.status(401).json({ error: 'Passkey setup expired. Please sign in again.' });
+  }
+  if (!response || typeof response.id !== 'string') {
+    return res.status(400).json({ error: 'The passkey response is incomplete. Please try again.' });
+  }
+  if (isAddition) delete req.session.pendingPasskeyAddition;
+  else delete req.session.pendingPasskeyEnrollment;
+
+  try {
+    const verification = await verifyRegistrationResponse({
+      response,
+      expectedChallenge: pending.challenge,
+      expectedOrigin: pending.origin,
+      expectedRPID: pending.rpID,
+      requireUserVerification: true,
+    });
+    if (!verification.verified || !verification.registrationInfo) {
+      return res.status(400).json({ error: 'The passkey could not be verified. Please try again.' });
+    }
+
+    const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+    await pool.query(
+      `INSERT INTO passkey_credentials
+         (user_id, credential_id, public_key, counter, transports, device_type, backed_up)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        pending.user.id,
+        credential.id,
+        Buffer.from(credential.publicKey),
+        credential.counter,
+        credential.transports || response.response.transports || [],
+        credentialDeviceType,
+        credentialBackedUp,
+      ]
+    );
+
+    if (isAddition) {
+      await pool.query(
+        'INSERT INTO login_attempts (username, ip_address, success) VALUES ($1, $2, TRUE)',
+        [pending.user.username, req.ip]
+      );
+    } else {
+      await regenerateSession(req);
+      req.session.user = {
+        id: pending.user.id,
+        username: pending.user.username,
+        role: pending.user.role,
+      };
+      req.session.authVersion = Number(pending.user.authVersion ?? 0);
+      delete req.session.pendingRegistration;
+      await pool.query(
+        `UPDATE users
+         SET last_login = NOW(), last_activity_at = NOW(),
+             passkey_email_grace_until = NOW() + INTERVAL '7 days'
+         WHERE id = $1`,
+        [pending.user.id]
+      );
+      await pool.query(
+        'INSERT INTO login_attempts (username, ip_address, success) VALUES ($1, $2, TRUE)',
+        [pending.user.username, req.ip]
+      );
+    }
+
+    const securityNotificationSent = pending.user.email
+      ? await sendSecurityNotification(
+        sendPasskeyAddedNotification,
+        pending.user.email,
+        pending.user.username,
+        'Passkey-added'
+      )
+      : false;
+
+    let welcomeEmailSent = true;
+    if (!isAddition && pending.user.email) {
+      try {
+        await sendWelcomeEmail(pending.user.email, pending.user.username);
+      } catch (mailError) {
+        welcomeEmailSent = false;
+        console.error('Welcome email failed:', mailError.code || mailError.message);
+      }
+    }
+    return res.json({
+      user: req.session.user,
+      welcomeEmailSent,
+      securityNotificationSent,
+      passkeyAdded: isAddition,
+    });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'This passkey is already linked to an account.' });
+    }
+    console.error('Passkey registration verification failed:', err.message);
+    res.status(err.code ? 500 : 400).json({
+      error: err.code
+        ? 'Could not save your passkey. Please try again shortly.'
+        : 'Could not verify that passkey. Please try again.',
+    });
+  }
+});
+
+router.post('/passkey/authenticate/verify', passkeyVerificationLimiter, async (req, res) => {
+  const pending = req.session.pendingPasskeyAuthentication;
+  const response = req.body?.credential;
+  if (!pending) return res.status(400).json({ error: 'Your sign-in has expired. Please try again.' });
+  if (Date.now() > pending.expiresAt) {
+    delete req.session.pendingPasskeyAuthentication;
+    return res.status(401).json({ error: 'Your sign-in has expired. Please enter your password again.' });
+  }
+  if (!response || typeof response.id !== 'string') {
+    return res.status(400).json({ error: 'The passkey response is incomplete. Please try again.' });
+  }
+  delete req.session.pendingPasskeyAuthentication;
+
+  try {
+    const result = await pool.query(
+      `SELECT id, credential_id, public_key, counter, transports
+       FROM passkey_credentials
+       WHERE user_id = $1 AND credential_id = $2`,
+      [pending.user.id, response.id]
+    );
+    const stored = result.rows[0];
+    if (!stored) return res.status(401).json({ error: 'That passkey is not linked to this account.' });
+
+    const verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: pending.challenge,
+      expectedOrigin: pending.origin,
+      expectedRPID: pending.rpID,
+      requireUserVerification: true,
+      credential: {
+        id: stored.credential_id,
+        publicKey: new Uint8Array(stored.public_key),
+        counter: Number(stored.counter),
+        transports: stored.transports,
+      },
+    });
+    if (!verification.verified) {
+      return res.status(401).json({ error: 'Passkey verification failed. Please try again.' });
+    }
+
+    await pool.query(
+      `UPDATE passkey_credentials
+       SET counter = $1, backed_up = $2, device_type = $3
+       WHERE id = $4 AND user_id = $5`,
+      [
+        verification.authenticationInfo.newCounter,
+        verification.authenticationInfo.credentialBackedUp,
+        verification.authenticationInfo.credentialDeviceType,
+        stored.id,
+        pending.user.id,
+      ]
+    );
+    await pool.query(
+      `UPDATE users
+       SET last_login = NOW(), last_activity_at = NOW(),
+           passkey_email_grace_until = NOW() + INTERVAL '7 days'
+       WHERE id = $1`,
+      [pending.user.id]
+    );
+    await pool.query(
+      'INSERT INTO login_attempts (username, ip_address, success) VALUES ($1, $2, TRUE)',
+      [pending.user.username, req.ip]
+    );
+
+    await regenerateSession(req);
+    req.session.user = {
+      id: pending.user.id,
+      username: pending.user.username,
+      role: pending.user.role,
+    };
+    req.session.authVersion = Number(pending.user.authVersion ?? 0);
+    delete req.session.pendingPasskeyEnrollment;
+    return res.json({ user: req.session.user });
+  } catch (err) {
+    console.error('Passkey sign-in verification failed:', err.message);
+    res.status(err.code ? 500 : 401).json({
+      error: err.code
+        ? 'Could not finish sign-in. Please try again shortly.'
+        : 'Passkey verification failed. Please try again.',
+    });
+  }
+});
+
+router.post('/recovery-codes', requireAuth, passwordResetLimiter, async (req, res) => {
+  const password = req.body?.password;
+  if (typeof password !== 'string' || password.length < 6 || password.length > 128) {
+    return res.status(400).json({ error: 'Enter your account password to generate recovery codes.' });
+  }
+
+  let client;
+  try {
+    const userResult = await pool.query(
+      'SELECT username, email, password_hash FROM users WHERE id = $1',
+      [req.session.user.id]
+    );
+    const user = userResult.rows[0];
+    if (!user || !(await verifyPassword(password, user.password_hash))) {
+      return res.status(401).json({ error: 'The password is incorrect. Recovery codes were not changed.' });
+    }
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query(
+      'SELECT id FROM users WHERE id = $1 FOR UPDATE',
+      [req.session.user.id]
+    );
+    const codes = createRecoveryCodes();
+    await client.query('DELETE FROM user_recovery_codes WHERE user_id = $1', [req.session.user.id]);
+    for (const code of codes) {
+      await client.query(
+        'INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, $2)',
+        [req.session.user.id, hashRecoveryCode(code)]
+      );
+    }
+    await client.query('COMMIT');
+
+    const notificationSent = await sendSecurityNotification(
+      sendRecoveryCodesChangedNotification,
+      user.email,
+      user.username,
+      'Recovery-code-change'
+    );
+    return res.json({
+      codes,
+      notificationSent,
+      message: 'Save these codes somewhere private and secure. Each can be used once. This is the only time they will be shown.',
+    });
+  } catch (error) {
+    if (client) {
+      await client.query('ROLLBACK').catch((rollbackError) => {
+        console.error('Could not roll back recovery-code replacement:', rollbackError.message);
+      });
+    }
+    console.error('Could not generate recovery codes:', error.message);
+    return res.status(500).json({ error: 'Could not generate recovery codes. Please try again.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+/* ---------- Password recovery ---------- */
+router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const genericResponse = {
+    message: 'If an account uses that email, a password reset code is on its way.',
+    step: 'password-reset',
+  };
+  if (!email || email.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.json(genericResponse);
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT id, username, email FROM users WHERE email = $1',
+      [email]
+    );
+    const user = result.rows[0];
+    if (!user) {
+      req.session.pendingPasswordReset = {
+        userId: null,
+        username: '',
+        email,
+        otpHash: hashOtp(createOtp()),
+        otpExpiresAt: Date.now() + PASSWORD_RESET_TTL_MS,
+        otpAttempts: 0,
+        otpLastSentAt: Date.now(),
+        isDummy: true,
+      };
+      return res.json(genericResponse);
+    }
+
+    const code = createOtp();
+    await sendPasswordResetCode(user.email, user.username, code);
+    req.session.pendingPasswordReset = {
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+      otpHash: hashOtp(code),
+      otpExpiresAt: Date.now() + PASSWORD_RESET_TTL_MS,
+      otpAttempts: 0,
+      otpLastSentAt: Date.now(),
+    };
+    return res.json(genericResponse);
+  } catch (error) {
+    console.error('Password reset email could not be sent:', error.code || error.message);
+    return res.status(503).json({
+      error: 'We could not send a reset code right now. Please try again shortly.',
+    });
+  }
+});
+
+router.post('/reset-password', passwordResetLimiter, async (req, res) => {
+  const pending = req.session.pendingPasswordReset;
+  const { token, recoveryCode, password } = req.body || {};
+  if (!pending) return res.status(400).json({ error: 'Request a new password reset code first.' });
+  if (Date.now() > pending.otpExpiresAt) {
+    delete req.session.pendingPasswordReset;
+    return res.status(401).json({ error: 'That reset code has expired. Request a new one.' });
+  }
+  if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
+    delete req.session.pendingPasswordReset;
+    return res.status(429).json({ error: 'Too many incorrect codes. Request a new one.' });
+  }
+  if (typeof token !== 'string' || !/^\d{6}$/.test(token) ||
+      typeof recoveryCode !== 'string' || !/^[\da-fA-F\s-]{20,40}$/.test(recoveryCode) ||
+      typeof password !== 'string' || password.length < 6 || password.length > 128) {
+    return res.status(400).json({
+      error: 'Enter the email code, one unused recovery code, and a password of 6-128 characters.',
+    });
+  }
+  if (pending.isDummy) {
+    pending.otpAttempts += 1;
+    return res.status(401).json({ error: 'That reset code is incorrect.' });
+  }
+  if (!otpMatches(pending.otpHash, token)) {
+    pending.otpAttempts += 1;
+    return res.status(401).json({ error: 'That reset code is incorrect.' });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [pending.userId]);
+    const codesResult = await client.query(
+      `SELECT id, code_hash
+       FROM user_recovery_codes
+       WHERE user_id = $1 AND used_at IS NULL
+       FOR UPDATE`,
+      [pending.userId]
+    );
+    const candidateHash = hashRecoveryCode(recoveryCode);
+    const matchingRecoveryCode = codesResult.rows.find((row) => (
+      hashesMatch(candidateHash, row.code_hash)
+    ));
+    if (!matchingRecoveryCode) {
+      await client.query('ROLLBACK');
+      pending.otpAttempts += 1;
+      return res.status(401).json({
+        error: 'The email code or recovery code is incorrect. Check both and try again.',
+      });
+    }
+
+    await client.query(
+      'DELETE FROM user_recovery_codes WHERE user_id = $1',
+      [pending.userId]
+    );
+    const { hash, salt } = await hashPassword(password);
+    await client.query(
+      `UPDATE users
+       SET password_hash = $1, salt = $2, passkey_email_grace_until = NULL,
+           auth_version = auth_version + 1
+       WHERE id = $3`,
+      [hash, salt, pending.userId]
+    );
+    await client.query('DELETE FROM passkey_credentials WHERE user_id = $1', [pending.userId]);
+    await client.query('COMMIT');
+    delete req.session.pendingPasswordReset;
+    const notificationSent = await sendSecurityNotification(
+      sendPasswordResetNotification,
+      pending.email,
+      pending.username,
+      'Password-reset'
+    );
+    return res.json({
+      notificationSent,
+      message: 'Your password has been reset. All passkeys and recovery codes were removed. Sign in with your new password, set up a passkey, and generate new recovery codes.',
+    });
+  } catch (error) {
+    if (client) {
+      await client.query('ROLLBACK').catch((rollbackError) => {
+        console.error('Could not roll back password reset:', rollbackError.message);
+      });
+    }
+    console.error('Password reset failed:', error.message);
+    return res.status(500).json({ error: 'Could not reset your password. Please try again.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+/* ---------- Resend registration or password reset code ---------- */
+router.post('/resend-code', passwordResetLimiter, async (req, res) => {
+  const pending = req.session.pendingRegistration ||
+    req.session.pendingPasswordReset ||
+    req.session.pendingPasskeyEmailVerification;
+  if (!pending) return res.status(400).json({ error: 'No verification code is waiting to be resent.' });
   const isRegistration = Boolean(req.session.pendingRegistration);
+  const isLoginVerification = Boolean(req.session.pendingPasskeyEmailVerification);
 
   const remainingMs = pending.otpLastSentAt + OTP_RESEND_COOLDOWN_MS - Date.now();
   if (remainingMs > 0) {
@@ -327,7 +900,17 @@ router.post('/resend-2fa', async (req, res) => {
   }
 
   try {
-    if (req.session.pendingRegistration) {
+    if (isLoginVerification) {
+      const code = createOtp();
+      await sendLoginCode(pending.user.email, pending.user.username, code);
+      req.session.pendingPasskeyEmailVerification = {
+        ...pending,
+        otpHash: hashOtp(code),
+        otpExpiresAt: Date.now() + OTP_TTL_MS,
+        otpAttempts: 0,
+        otpLastSentAt: Date.now(),
+      };
+    } else if (req.session.pendingRegistration) {
       const code = createOtp();
       await sendRegistrationCode(pending.email, pending.username, code);
       req.session.pendingRegistration = {
@@ -338,13 +921,24 @@ router.post('/resend-2fa', async (req, res) => {
         otpLastSentAt: Date.now(),
       };
     } else {
-      const freshPending = await issueLoginCode(pending);
-      req.session.pendingUser = freshPending;
+      const code = createOtp();
+      if (!pending.isDummy) {
+        await sendPasswordResetCode(pending.email, pending.username, code);
+      }
+      req.session.pendingPasswordReset = {
+        ...pending,
+        otpHash: hashOtp(code),
+        otpExpiresAt: Date.now() + PASSWORD_RESET_TTL_MS,
+        otpAttempts: 0,
+        otpLastSentAt: Date.now(),
+      };
     }
     res.json({
-      message: isRegistration
+      message: isLoginVerification
+        ? `A new sign-in code was sent to ${maskEmail(pending.user.email)}. Use only the newest code.`
+        : isRegistration
         ? `Gmail accepted a new code email for ${pending.email}. Search Gmail for in:anywhere subject:"Your LogiAuth verification code" and use only the newest code.`
-        : 'Gmail accepted the new code email. Check Inbox, Spam, and All Mail.',
+        : 'If the email matches an account, a new password reset code is on its way.',
       delivery: 'accepted',
       deliveryAddress: isRegistration ? pending.email : undefined,
     });

@@ -11,8 +11,10 @@ function getRedisClient() {
   redisClient = createClient({
     url: process.env.REDIS_URL,
     socket: {
-      connectTimeout: 1200,
-      reconnectStrategy: false,
+      connectTimeout: 10000,
+      reconnectStrategy: (retries) => (
+        retries > 5 ? new Error('Redis could not reconnect after five attempts.') : Math.min(retries * 250, 3000)
+      ),
     },
   });
   redisClient.on('error', (error) => {

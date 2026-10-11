@@ -1,0 +1,184 @@
+.auth-panel:not(.dashboard-open) #passkey-section,
+.auth-panel:not(.dashboard-open) #forgot-password-section {
+  position: relative;
+  z-index: 1;
+  grid-column: 2;
+  grid-row: 3 / 5;
+  justify-self: center;
+  align-self: center;
+  width: min(100%, 440px);
+  padding: 1.5rem 2rem;
+}
+
+.auth-panel:not(.dashboard-open) #forgot-password-section h2 {
+  margin-bottom: .65rem;
+  color: #f4f4f5;
+  font-size: 1.35rem;
+}
+
+.auth-panel:not(.dashboard-open) #forgot-password-section .field-help {
+  margin-bottom: 1.2rem;
+}
+
+.auth-panel:not(.dashboard-open) #reset-password-form {
+  margin-top: 1.25rem;
+}
+
+.auth-panel:not(.dashboard-open) #passkey-section .btn {
+  min-height: 54px;
+}
+
+.field-help {
+  margin-top: .4rem;
+  color: #a1a1aa;
+  font-size: .78rem;
+  line-height: 1.45;
+}
+
+.recovery-codes-card,
+.passkey-management-card {
+  margin: 0 0 1rem;
+}
+
+.recovery-codes-form {
+  max-width: 520px;
+}
+
+.recovery-codes-form .field {
+  margin-bottom: .75rem;
+}
+
+.recovery-codes-output {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid #6c865c;
+  border-radius: 12px;
+  background: #172016;
+}
+
+.recovery-codes-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: .5rem 1.25rem;
+  margin: .8rem 0;
+  padding-left: 1.6rem;
+  color: #e8f3e2;
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.recovery-codes-card .field-help {
+  max-width: 680px;
+}
+
+.recovery-codes-output .small-button,
+.passkey-management-card .small-button {
+  margin-top: .5rem;
+}
+
+.auth-panel:not(.dashboard-open) #reset-password-form .field-help {
+  margin-top: .4rem;
+}
+
+.account-security-menu {
+  margin-bottom: 1rem;
+  padding: 0;
+}
+
+.account-security-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.2rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.account-security-summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-security-copy {
+  display: grid;
+  gap: .25rem;
+}
+
+.account-security-copy strong {
+  color: #f4f4f5;
+  font-size: 1rem;
+}
+
+.account-security-copy .field-help {
+  margin: 0;
+}
+
+.account-security-toggle {
+  flex: 0 0 auto;
+  color: #a5f36b;
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.account-security-toggle::after {
+  content: " +";
+}
+
+.account-security-menu[open] .account-security-toggle::after {
+  content: " −";
+}
+
+.account-security-content {
+  padding: 0 1.2rem 1.2rem;
+}
+
+.account-security-content > section {
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid #2d3038;
+}
+
+.account-security-content > section + section {
+  margin-top: 1rem;
+}
+
+@media (max-width: 760px) {
+  .auth-panel:not(.dashboard-open) #passkey-section,
+  .auth-panel:not(.dashboard-open) #forgot-password-section {
+    grid-column: 1;
+    grid-row: 5;
+    padding: 1rem 1.5rem 1.75rem;
+  }
+
+  .account-security-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-panel:not(.dashboard-open) .auth-form-panel:not(.hidden) {
+    animation: none;
+  }
+}
+
+html[data-theme="light"] .account-security-copy strong {
+  color: #27272a;
+}
+
+html[data-theme="light"] .account-security-toggle {
+  color: #4d713c;
+}
+
+html[data-theme="light"] .recovery-codes-output {
+  background: #f4f8f1;
+}
+
+html[data-theme="light"] .recovery-codes-list {
+  color: #253027;
+}
+
+html[data-theme="light"] .auth-panel:not(.dashboard-open) #forgot-password-section h2,
+html[data-theme="light"] .auth-panel:not(.dashboard-open) #passkey-section .otp-title {
+  color: #253027;
+}

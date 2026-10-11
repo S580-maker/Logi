@@ -5,6 +5,9 @@ const networkErrorMessage = location.protocol === 'file:'
 let messageTimer;
 let currentUser;
 let verificationPurpose = 'login';
+let passwordResetCode = '';
+let pendingPasskeyOptions;
+let passkeyAction = 'authentication';
 let activeUploadCourse;
 let currentReadingSlide;
 let currentNotebook;
@@ -28,6 +31,62 @@ const authThemeToggleLabel = authThemeToggle.querySelector('.auth-theme-toggle-l
 const authThemeToggleIcon = authThemeToggle.querySelector('.auth-theme-toggle-icon');
 const THEME_STORAGE_KEY = 'logiauth-theme';
 let authThemeAnimationTimer;
+
+function decodeBase64Url(value) {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function encodeBase64Url(value) {
+  const bytes = new Uint8Array(value);
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function preparePasskeyOptions(options, action) {
+  const publicKey = { ...options, challenge: decodeBase64Url(options.challenge) };
+  if (action === 'registration') {
+    publicKey.user = { ...options.user, id: decodeBase64Url(options.user.id) };
+    publicKey.excludeCredentials = (options.excludeCredentials || []).map((credential) => ({
+      ...credential,
+      id: decodeBase64Url(credential.id),
+    }));
+  } else {
+    publicKey.allowCredentials = (options.allowCredentials || []).map((credential) => ({
+      ...credential,
+      id: decodeBase64Url(credential.id),
+    }));
+  }
+  return publicKey;
+}
+
+function serializePasskeyCredential(credential, action) {
+  const response = {
+    clientDataJSON: encodeBase64Url(credential.response.clientDataJSON),
+  };
+  if (action === 'registration') {
+    response.attestationObject = encodeBase64Url(credential.response.attestationObject);
+    response.transports = credential.response.getTransports?.() || [];
+  } else {
+    response.authenticatorData = encodeBase64Url(credential.response.authenticatorData);
+    response.signature = encodeBase64Url(credential.response.signature);
+    if (credential.response.userHandle) {
+      response.userHandle = encodeBase64Url(credential.response.userHandle);
+    }
+  }
+  return {
+    id: credential.id,
+    rawId: encodeBase64Url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment,
+    clientExtensionResults: credential.getClientExtensionResults(),
+    response,
+  };
+}
 
 function setTheme(theme, persist = false) {
   const isLight = theme === 'light';
@@ -330,11 +389,21 @@ const hideAll = () => {
   $('file-launch-help').classList.add('hidden');
   $('register-section').classList.add('hidden');
   $('twofa-section').classList.add('hidden');
+  $('forgot-password-section').classList.add('hidden');
+  $('passkey-section').classList.add('hidden');
   $('dashboard-section').classList.add('hidden');
 };
 
 const showLogin = () => {
   resetPasswordVisibility();
+  passwordResetCode = '';
+  $('reset-new-password').value = '';
+  $('reset-confirm-password').value = '';
+  $('reset-recovery-code').value = '';
+  $('recovery-codes-form').reset();
+  $('recovery-codes-list').replaceChildren();
+  $('recovery-codes-output').classList.add('hidden');
+  pendingPasskeyOptions = undefined;
   hideAll();
   document.body.classList.remove('dashboard-page');
   document.querySelector('.auth-panel').classList.remove('dashboard-open');
@@ -371,16 +440,72 @@ const showRegister = () => {
 
 const show2FA = (maskedEmail, purpose = 'login') => {
   resetPasswordVisibility();
+  passwordResetCode = '';
+  $('reset-new-password').value = '';
+  $('reset-confirm-password').value = '';
+  $('reset-recovery-code').value = '';
   verificationPurpose = purpose;
   hideAll();
   $('twofa-section').classList.remove('hidden');
-  $('otp-title').textContent = purpose === 'registration' ? 'Verify your email' : 'Verify your identity';
+  $('otp-container').classList.remove('error', 'verify');
+  $('otp-container').classList.remove('hidden');
+  $('reset-password-form').classList.add('hidden');
+  $('resend-code-btn').classList.toggle('hidden', purpose === 'login');
+  $('back-btn').classList.remove('hidden');
+  $('otp-title').textContent = purpose === 'registration'
+    ? 'Verify your email'
+    : purpose === 'password-reset'
+      ? 'Verify your email'
+      : purpose === 'login-email'
+        ? 'Verify your sign-in'
+        : 'Verify your identity';
   $('otp-subtitle').textContent = purpose === 'registration'
     ? `Enter the 6-digit code sent to ${maskedEmail}. Check this address is correct; choose Back to account details to change it.`
-    : `Enter the 6-digit code sent to ${maskedEmail}.`;
+    : purpose === 'password-reset'
+      ? 'Enter the 6-digit reset code sent to your email. You will also need an unused recovery code.'
+      : purpose === 'login-email'
+        ? `For the first 7 days after setting up your passkey, enter the 6-digit sign-in code sent to ${maskedEmail}.`
+        : `Enter the 6-digit code sent to ${maskedEmail}.`;
   $('back-btn').textContent = purpose === 'registration' ? 'Back to account details' : 'Back to sign in';
   $('resend-code-btn').textContent = 'Resend code';
   otpSlots[0].focus();
+};
+
+const showForgotPassword = () => {
+  resetPasswordVisibility();
+  hideAll();
+  document.body.classList.remove('dashboard-page');
+  document.querySelector('.auth-panel').classList.remove('dashboard-open');
+  $('auth-mode-switch').classList.add('hidden');
+  $('forgot-password-section').classList.remove('hidden');
+  $('forgot-email').value = $('username').value.includes('@') ? $('username').value : '';
+  $('forgot-email').focus();
+};
+
+const showPasskeyStep = (action, options) => {
+  hideAll();
+  document.body.classList.remove('dashboard-page');
+  document.querySelector('.auth-panel').classList.remove('dashboard-open');
+  passkeyAction = action;
+  pendingPasskeyOptions = options;
+  $('auth-mode-switch').classList.add('hidden');
+  $('passkey-section').classList.remove('hidden');
+  $('passkey-action-btn').disabled = false;
+  $('passkey-title').textContent = action === 'registration'
+    ? 'Set up your passkey'
+    : action === 'addition'
+      ? 'Add another passkey'
+      : 'Verify with your passkey';
+  $('passkey-subtitle').textContent = action === 'registration'
+    ? 'Your password is verified. Create a passkey on this device to finish setting up secure sign-in.'
+    : action === 'addition'
+      ? 'Create a passkey on another trusted device. Your current sign-in will stay active.'
+      : 'Use your device’s fingerprint, face, or screen lock to complete sign-in.';
+  $('passkey-action-btn').textContent = action === 'registration'
+    ? 'Create passkey'
+    : action === 'addition'
+      ? 'Add passkey'
+      : 'Continue with passkey';
 };
 
 const showDashboard = (user) => {
@@ -391,12 +516,15 @@ const showDashboard = (user) => {
   document.body.classList.toggle('is-admin', user.role === 'admin');
   document.querySelector('.auth-panel').classList.add('dashboard-open');
   $('dashboard-section').classList.remove('hidden');
-  $('welcome-username').textContent = user.username;
+  $('recovery-codes-output').classList.add('hidden');
+  $('recovery-codes-list').replaceChildren();
+  $('recovery-codes-form').reset();
+  $('add-passkey-form').reset();
   $('dashboard-eyebrow').textContent = user.role === 'admin' ? 'SYSTEM MONITOR' : 'LOGIAUTH WORKSPACE';
   $('dashboard-title').replaceChildren(
     ...(user.role === 'admin'
       ? [document.createTextNode('System overview')]
-      : [document.createTextNode('Welcome, '), $('welcome-username')])
+      : [document.createTextNode(`Welcome, ${user.username}`)])
   );
   $('role-badge').textContent = user.role === 'admin' ? 'ADMINISTRATOR · READ ONLY' : user.role.toUpperCase();
   $('backup-btn').classList.add('hidden');
@@ -547,7 +675,13 @@ async function loadDashboard() {
     if (!response.ok) throw new Error(data.error || 'Could not load dashboard.');
     renderDashboard(data);
   } catch (error) {
-    showMessage(error.message || networkErrorMessage, 'error');
+    console.error('Could not refresh dashboard data:', error);
+    showMessage(
+      error instanceof TypeError && error.message === 'Failed to fetch'
+        ? 'You are signed in, but dashboard data could not load. Check your connection and select Refresh to try again.'
+        : `${error.message || 'Dashboard data could not load.'} Select Refresh to try again.`,
+      'error'
+    );
   } finally {
     $('refresh-dashboard-btn').disabled = false;
   }
@@ -1478,12 +1612,18 @@ $('login-form').addEventListener('submit', async (event) => {
 
     if (!r.ok) return showMessage(data.error || 'Login failed.', 'error');
 
-    if (data.step === '2fa') {
-      showMessage('A verification code was sent to your email.', 'info');
-      show2FA(data.email);
-    } else {
-      showMessage('Login successful.', 'success');
+    if (data.step === 'passkey-authentication') {
+      showPasskeyStep('authentication', data.options);
+    } else if (data.step === 'passkey-enrollment') {
+      showPasskeyStep('registration', data.options);
+      showMessage('Your password is verified. Set up a passkey to finish signing in.', 'info');
+    } else if (data.step === 'passkey-email-verification') {
+      show2FA(data.email, 'login-email');
+    } else if (data.user) {
       showDashboard(data.user);
+      showMessage('Signed in successfully.', 'success');
+    } else {
+      showMessage('Sign-in could not continue. Please try again.', 'error');
     }
   } catch (e) {
     showMessage(networkErrorMessage, 'error');
@@ -1491,6 +1631,275 @@ $('login-form').addEventListener('submit', async (event) => {
     loginButton.disabled = false;
     loginButton.textContent = 'Sign in';
     loginButton.removeAttribute('aria-busy');
+  }
+});
+
+/* --- Password recovery and passkey verification --- */
+$('forgot-password-btn').addEventListener('click', showForgotPassword);
+$('forgot-back-btn').addEventListener('click', () => {
+  showLogin();
+  $('username').focus();
+});
+
+$('forgot-password-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('forgot-password-form').checkValidity()) {
+    $('forgot-password-form').reportValidity();
+    return;
+  }
+  const email = $('forgot-email').value.trim();
+  const button = $('forgot-submit-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ email }),
+    });
+    const data = await response.json();
+    if (!response.ok) return showMessage(data.error || 'Could not start password recovery.', 'error');
+    resetOtp();
+    show2FA('', 'password-reset');
+    showMessage(data.message, 'info');
+  } catch {
+    showMessage(networkErrorMessage, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('reset-password-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('reset-password-form').checkValidity()) {
+    $('reset-password-form').reportValidity();
+    return;
+  }
+  const password = $('reset-new-password').value;
+  if (password !== $('reset-confirm-password').value) {
+    showMessage('Those passwords do not match. Please check them and try again.', 'error');
+    $('reset-confirm-password').focus();
+    return;
+  }
+
+  const button = $('reset-password-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        token: passwordResetCode,
+        recoveryCode: $('reset-recovery-code').value.trim(),
+        password,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) return showMessage(data.error || 'Could not reset your password.', 'error');
+    passwordResetCode = '';
+    $('reset-recovery-code').value = '';
+    $('reset-new-password').value = '';
+    $('reset-confirm-password').value = '';
+    showLogin();
+    showMessage(
+      data.notificationSent
+        ? data.message
+        : `${data.message} The security notification email could not be sent.`,
+      data.notificationSent ? 'success' : 'info'
+    );
+  } catch {
+    showMessage(networkErrorMessage, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('recovery-codes-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('recovery-codes-form').checkValidity()) {
+    $('recovery-codes-form').reportValidity();
+    return;
+  }
+
+  const button = $('generate-recovery-codes-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/auth/recovery-codes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ password: $('recovery-codes-password').value }),
+    });
+    const data = await response.json();
+    if (!response.ok) return showMessage(data.error || 'Could not generate recovery codes.', 'error');
+
+    $('recovery-codes-password').value = '';
+    $('recovery-codes-list').replaceChildren(...data.codes.map((code) => element('li', 'recovery-code', code)));
+    $('recovery-codes-message').textContent = data.notificationSent
+      ? data.message
+      : `${data.message} We could not send the security notification email.`;
+    $('recovery-codes-output').classList.remove('hidden');
+    showMessage('Recovery codes generated. Save them now; they will not be shown again.', data.notificationSent ? 'success' : 'info');
+  } catch {
+    showMessage(networkErrorMessage, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('copy-recovery-codes-btn').addEventListener('click', async () => {
+  const codes = [...$('recovery-codes-list').children].map((item) => item.textContent).join('\n');
+  try {
+    await navigator.clipboard.writeText(codes);
+    showMessage('Recovery codes copied. Store them somewhere private and secure.', 'success');
+  } catch {
+    showMessage('Could not copy automatically. Select the codes and copy them manually.', 'error');
+  }
+});
+
+$('reset-code-back-btn').addEventListener('click', () => {
+  passwordResetCode = '';
+  $('reset-password-form').classList.add('hidden');
+  $('otp-container').classList.remove('hidden');
+  $('resend-code-btn').classList.remove('hidden');
+  resetOtp();
+  otpSlots[0].focus();
+});
+
+$('passkey-action-btn').addEventListener('click', async () => {
+  const button = $('passkey-action-btn');
+  if (!pendingPasskeyOptions) {
+    showMessage('This passkey request expired. Please start again.', 'error');
+    return;
+  }
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    showMessage('Passkeys are not supported in this browser. Try a recent browser on a device with a screen lock or biometric sign-in.', 'error');
+    return;
+  }
+
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  try {
+    const isCreatingPasskey = passkeyAction !== 'authentication';
+    let credential;
+    try {
+      credential = isCreatingPasskey
+        ? await navigator.credentials.create({
+          publicKey: preparePasskeyOptions(pendingPasskeyOptions, 'registration'),
+        })
+        : await navigator.credentials.get({
+          publicKey: preparePasskeyOptions(pendingPasskeyOptions, 'authentication'),
+        });
+      if (!credential) throw new Error('The device did not return a passkey.');
+    } catch (error) {
+      if (error.name === 'NotAllowedError') {
+        showMessage('Passkey use was cancelled or timed out. Try again when you are ready.', 'info');
+      } else if (error.name === 'NotSupportedError') {
+        showMessage('This device or browser does not support the requested passkey operation.', 'error');
+      } else {
+        console.error('Could not create or retrieve passkey:', error);
+        showMessage(`Could not use your passkey: ${error.message || 'Please try again.'}`, 'error');
+      }
+      return;
+    }
+
+    const endpoint = isCreatingPasskey
+      ? '/api/auth/passkey/register/verify'
+      : '/api/auth/passkey/authenticate/verify';
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ credential: serializePasskeyCredential(credential, passkeyAction) }),
+      });
+    } catch (error) {
+      console.error('Could not send passkey response to LogiAuth:', error);
+      showMessage(networkErrorMessage, 'error');
+      return;
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (error) {
+      console.error('Could not read passkey verification response:', error);
+      showMessage('LogiAuth returned an unreadable response. Refresh the page and try again.', 'error');
+      return;
+    }
+
+    if (!response.ok) {
+      pendingPasskeyOptions = undefined;
+      $('passkey-action-btn').disabled = true;
+      showMessage(`${data.error || 'Passkey verification failed.'} Go back to sign in to start again.`, 'error');
+      return;
+    }
+
+    const enrolling = passkeyAction === 'registration';
+    const adding = passkeyAction === 'addition';
+    pendingPasskeyOptions = undefined;
+    try {
+      showDashboard(data.user);
+    } catch (error) {
+      console.error('Passkey verified, but the dashboard could not be displayed:', error);
+      showMessage('Your passkey was verified, but the dashboard could not be displayed. Refresh the page to continue.', 'error');
+      return;
+    }
+    showMessage(
+      adding
+        ? (data.securityNotificationSent === false
+          ? 'Another passkey was added, but the security notification email could not be sent.'
+          : 'Another passkey was added. A security notification was emailed to your account address.')
+        : enrolling
+        ? [
+          'Passkey saved. Your account is ready for secure sign-in.',
+          ...(data.securityNotificationSent === false ? ['The security notification email could not be sent.'] : []),
+          ...(data.welcomeEmailSent === false ? ['The welcome email could not be sent.'] : []),
+        ].join(' ')
+        : 'Passkey verified. You are signed in.',
+      (enrolling || adding) && (data.welcomeEmailSent === false || data.securityNotificationSent === false) ? 'info' : 'success'
+    );
+  } finally {
+    button.disabled = false;
+    button.removeAttribute('aria-busy');
+  }
+});
+
+$('passkey-back-btn').addEventListener('click', () => {
+  if (passkeyAction === 'addition' && currentUser) {
+    showDashboard(currentUser);
+  } else {
+    showLogin();
+    $('username').focus();
+  }
+  showMessage('', 'info');
+});
+
+$('add-passkey-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('add-passkey-form').checkValidity()) {
+    $('add-passkey-form').reportValidity();
+    return;
+  }
+  const button = $('add-passkey-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/auth/passkey/add/options', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ password: $('add-passkey-password').value }),
+    });
+    const data = await response.json();
+    if (!response.ok) return showMessage(data.error || 'Could not start adding a passkey.', 'error');
+    $('add-passkey-password').value = '';
+    showPasskeyStep('addition', data.options);
+  } catch {
+    showMessage(networkErrorMessage, 'error');
+  } finally {
+    button.disabled = false;
   }
 });
 
@@ -1569,7 +1978,7 @@ $('register-form').addEventListener('submit', async (event) => {
 $('resend-code-btn').addEventListener('click', async () => {
   $('resend-code-btn').disabled = true;
   try {
-    const r = await fetch('/api/auth/resend-2fa', {
+    const r = await fetch('/api/auth/resend-code', {
       method: 'POST',
       credentials: 'same-origin',
     });
@@ -1605,15 +2014,28 @@ const verifyOtp = async () => {
   const value = [...otpSlots].map((slot) => slot.value).join('');
   if (value.length !== 6 || !/^\d{6}$/.test(value)) return;
 
+  if (verificationPurpose === 'password-reset') {
+    passwordResetCode = value;
+    $('otp-container').classList.add('hidden');
+    $('resend-code-btn').classList.add('hidden');
+    $('reset-password-form').classList.remove('hidden');
+    $('reset-new-password').focus();
+    return;
+  }
+
   otpSlots.forEach((slot) => { slot.disabled = true; });
   try {
     const isRegistration = verificationPurpose === 'registration';
-    const r = await fetch(isRegistration ? '/api/auth/verify-registration' : '/api/auth/verify-2fa', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ token: value }),
-    });
+    const isLoginEmail = verificationPurpose === 'login-email';
+    const r = await fetch(
+      isLoginEmail ? '/api/auth/verify-login-email-code' : '/api/auth/verify-registration',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ token: value }),
+      }
+    );
     const data = await r.json();
 
     if (!r.ok) {
@@ -1632,36 +2054,53 @@ const verifyOtp = async () => {
       clearTimeout(otpErrorTimer);
       otpContainer.classList.add('verify');
       setTimeout(() => {
-        showDashboard(data.user);
+        showPasskeyStep('registration', data.options);
         otpContainer.classList.remove('verify');
         resetOtp();
         otpSlots.forEach((slot) => { slot.disabled = false; });
-        showMessage(
-          data.welcomeEmailSent
-            ? 'Email verified. Your account is ready, and you’re signed in. A welcome email is on its way.'
-            : 'Email verified. Your account is ready and you’re signed in, but we could not send the welcome email.',
-          data.welcomeEmailSent ? 'success' : 'info'
-        );
+        showMessage('Email verified. Create a passkey to finish setting up your account.', 'success');
         verificationPurpose = 'login';
       }, 1500);
       return;
     }
 
-    otpContainer.classList.add('verify');
-    setTimeout(() => {
-      showMessage('2FA verified.', 'success');
-      showDashboard(data.user);
-      otpContainer.classList.remove('verify');
-      resetOtp();
-      otpSlots.forEach((slot) => { slot.disabled = false; });
-    }, 1500);
+    if (isLoginEmail) {
+      completeEmailCodeSignIn(data.user);
+      return;
+    }
   } catch (err) {
-    showMessage(networkErrorMessage, 'error');
+    console.error('Could not verify email code:', err);
+    showMessage(
+      err instanceof TypeError
+        ? networkErrorMessage
+        : 'Could not read the verification response. Please try again.',
+      'error'
+    );
     resetOtp();
     otpSlots.forEach((slot) => { slot.disabled = false; });
     otpSlots[0].focus();
   }
 };
+
+function completeEmailCodeSignIn(user) {
+  clearTimeout(otpErrorTimer);
+  otpContainer.classList.remove('error');
+  otpContainer.classList.add('verify');
+  otpSlots.forEach((slot) => { slot.disabled = true; });
+  setTimeout(() => {
+    otpContainer.classList.remove('verify');
+    resetOtp();
+    otpSlots.forEach((slot) => { slot.disabled = false; });
+    verificationPurpose = 'login';
+    try {
+      showDashboard(user);
+      showMessage('Email code verified. You are signed in. Your passkey will be required after this 7-day period.', 'success');
+    } catch (error) {
+      console.error('Sign-in succeeded, but the dashboard could not be displayed:', error);
+      showMessage('You are signed in, but the dashboard could not be displayed. Refresh the page to continue.', 'error');
+    }
+  }, 1500);
+}
 
 otpSlots.forEach((slot, index) => {
   slot.addEventListener('input', () => {
@@ -1706,11 +2145,18 @@ otpSlots.forEach((slot, index) => {
 $('back-btn').addEventListener('click', () => {
   clearTimeout(otpErrorTimer);
   otpContainer.classList.remove('error', 'verify');
+  otpContainer.classList.remove('hidden');
+  $('reset-password-form').classList.add('hidden');
+  $('resend-code-btn').classList.remove('hidden');
+  $('back-btn').classList.remove('hidden');
   otpSlots.forEach((slot) => { slot.disabled = false; });
   resetOtp();
   if (verificationPurpose === 'registration') {
     showRegister();
     $('register-username').focus();
+  } else if (verificationPurpose === 'password-reset') {
+    showLogin();
+    $('username').focus();
   } else {
     showLogin();
     $('username').focus();
