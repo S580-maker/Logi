@@ -6,7 +6,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "db:init": "node db/init.js",
-    "user:create": "node scripts/create-user.js"
+    "user:create": "node scripts/create-user.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=22.13.0"

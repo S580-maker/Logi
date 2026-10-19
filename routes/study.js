@@ -28,7 +28,7 @@ const allowedTypes = {
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 const courseAccessSql = (userIdParam, roleParam) => `(
-  $${roleParam} IN ('admin', 'editor')
+  $${roleParam} IN ('admin', 'manager', 'editor', 'content_manager')
   OR c.created_by IS NULL
   OR c.created_by = $${userIdParam}
   OR c.created_by IN (SELECT id FROM users WHERE role IN ('admin', 'editor'))
@@ -336,7 +336,7 @@ router.get('/semester', requireAuth, async (req, res) => {
   }
 });
 
-router.put('/semester', requireAuth, requireRole('editor', 'student'), async (req, res) => {
+router.put('/semester', requireAuth, requireRole('manager', 'editor', 'instructor', 'content_manager', 'student'), async (req, res) => {
   const program = typeof req.body?.program === 'string' ? req.body.program.trim() : '';
   const semester = typeof req.body?.semester === 'string' ? req.body.semester.trim() : '';
   const courseIds = req.body?.courseIds === undefined ? [] : req.body.courseIds;
@@ -484,7 +484,7 @@ router.get('/courses/:courseId/notebook', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/courses/:courseId/notebook/chat', requireAuth, requireRole('editor', 'student'), async (req, res) => {
+router.post('/courses/:courseId/notebook/chat', requireAuth, requireRole('manager', 'editor', 'instructor', 'content_manager', 'student'), async (req, res) => {
   const courseId = Number(req.params.courseId);
   const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
   const sourceIds = req.body?.sourceIds;
@@ -588,7 +588,7 @@ router.get('/courses/:courseId/slides', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/courses', requireAuth, requireRole('editor', 'student'), async (req, res) => {
+router.post('/courses', requireAuth, requireRole('manager', 'editor', 'instructor', 'content_manager', 'student'), async (req, res) => {
   const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
   const description = typeof req.body.description === 'string' ? req.body.description.trim() : '';
   if (!title || title.length > 120 || description.length > 500) {
@@ -633,7 +633,7 @@ async function requireCourseAccess(req, res, next) {
 router.post(
   '/courses/:courseId/slides',
   requireAuth,
-  requireRole('editor', 'student'),
+  requireRole('manager', 'editor', 'instructor', 'content_manager', 'student'),
   requireCourseAccess,
   uploadFile,
   async (req, res) => {
@@ -689,7 +689,7 @@ router.post(
   }
 );
 
-router.put('/courses/:courseId/slides/:slideId/progress', requireAuth, requireRole('editor', 'student'), async (req, res) => {
+router.put('/courses/:courseId/slides/:slideId/progress', requireAuth, requireRole('manager', 'editor', 'instructor', 'content_manager', 'student'), async (req, res) => {
   const courseId = Number(req.params.courseId);
   const slideId = Number(req.params.slideId);
   const completed = req.body?.completed;
@@ -745,7 +745,7 @@ router.put('/courses/:courseId/slides/:slideId/progress', requireAuth, requireRo
   }
 });
 
-router.put('/courses/:courseId/slides/:slideId/note', requireAuth, requireRole('editor', 'student'), async (req, res) => {
+router.put('/courses/:courseId/slides/:slideId/note', requireAuth, requireRole('manager', 'editor', 'instructor', 'content_manager', 'student'), async (req, res) => {
   const courseId = Number(req.params.courseId);
   const slideId = Number(req.params.slideId);
   const note = req.body?.note;
@@ -779,7 +779,7 @@ router.put('/courses/:courseId/slides/:slideId/note', requireAuth, requireRole('
 router.delete(
   '/courses/:courseId/slides/:slideId',
   requireAuth,
-  requireRole('editor', 'student'),
+  requireRole('manager', 'editor', 'instructor', 'content_manager', 'student'),
   async (req, res) => {
     const courseId = Number(req.params.courseId);
     const slideId = Number(req.params.slideId);

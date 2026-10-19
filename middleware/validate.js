@@ -55,7 +55,10 @@ function requireAuth(req, res, next) {
     return invalidateSession(req, res);
   }
 
-  pool.query('SELECT auth_version FROM users WHERE id = $1', [req.session.user.id])
+  pool.query(
+    'SELECT auth_version FROM users WHERE id = $1 AND deleted_at IS NULL',
+    [req.session.user.id]
+  )
     .then(({ rows }) => {
       if (!rows[0] || Number(rows[0].auth_version) !== req.session.authVersion) {
         return invalidateSession(req, res);

@@ -4,22 +4,36 @@ const speakeasy = require('speakeasy');
 require('dotenv').config();
 
 const SALT_ROUNDS = 12;
+const HASH_VERSION = 'bcrypt-hmac-sha256$';
+
+function pepperedPassword(plainPassword) {
+  if (!process.env.PEPPER) {
+    throw new Error('PEPPER must be configured before hashing or verifying passwords.');
+  }
+  return crypto
+    .createHmac('sha256', process.env.PEPPER)
+    .update(`logiauth:password:v1:${plainPassword}`)
+    .digest('hex');
+}
 
 /**
- * Layer 1 of SQLi/DB protection: never send raw password to DB.
- * Layer 2: bcrypt with per-user salt.
- * Layer 3: prepend global pepper (kept outside DB in .env).
+ * HMAC-SHA-256 applies the server-side pepper before bcrypt; bcrypt supplies a
+ * unique per-password salt and stores that salt in the encoded hash.
  */
 async function hashPassword(plainPassword) {
   const salt = await bcrypt.genSalt(SALT_ROUNDS);
-  const withPepper = plainPassword + process.env.PEPPER;
-  const hash = await bcrypt.hash(withPepper, salt);
+  const hash = HASH_VERSION + await bcrypt.hash(pepperedPassword(plainPassword), salt);
   return { hash, salt };
 }
 
 async function verifyPassword(plainPassword, storedHash) {
-  const withPepper = plainPassword + process.env.PEPPER;
-  return bcrypt.compare(withPepper, storedHash);
+  const withPepper = pepperedPassword(plainPassword);
+  if (storedHash.startsWith(HASH_VERSION)) {
+    return bcrypt.compare(withPepper, storedHash.slice(HASH_VERSION.length));
+  }
+  // Existing accounts used bcrypt(password + pepper); keep them valid until
+  // they change their password and are re-hashed with the versioned format.
+  return bcrypt.compare(plainPassword + process.env.PEPPER, storedHash);
 }
 
 function generateTwoFASecret(username) {

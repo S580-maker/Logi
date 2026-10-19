@@ -5,8 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     email         VARCHAR(120) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     salt          TEXT NOT NULL,
-    role          VARCHAR(20) NOT NULL DEFAULT 'student'
-                  CHECK (role IN ('admin', 'editor', 'student')),
+    role          VARCHAR(30) NOT NULL DEFAULT 'student',
     twofa_secret  TEXT,
     twofa_enabled BOOLEAN DEFAULT FALSE,
     created_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -19,6 +18,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS passkey_email_grace_until TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 -- Login attempts (for rate-limiting & auditing)
 CREATE TABLE IF NOT EXISTS login_attempts (
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS course_slides (
 CREATE INDEX IF NOT EXISTS idx_course_slides_course_created
     ON course_slides(course_id, created_at DESC);
 
--- Upgrade existing installations and convert former viewers to students.
+-- Keep role assignments stable while upgrading existing installations.
 DO $$
 DECLARE
     role_constraint RECORD;
@@ -97,11 +97,45 @@ BEGIN
         EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', role_constraint.conname);
     END LOOP;
 
-    UPDATE users SET role = 'student' WHERE role = 'viewer';
     ALTER TABLE users ALTER COLUMN role SET DEFAULT 'student';
     ALTER TABLE users ADD CONSTRAINT users_role_check
-        CHECK (role IN ('admin', 'editor', 'student'));
+        CHECK (role IN (
+            'admin', 'manager', 'editor', 'instructor', 'student',
+            'viewer', 'auditor', 'support', 'content_manager'
+        ));
 END $$;
+
+CREATE TABLE IF NOT EXISTS deleted_users (
+    id             BIGSERIAL PRIMARY KEY,
+    user_id        INTEGER NOT NULL,
+    username       VARCHAR(50) NOT NULL,
+    email          VARCHAR(120) NOT NULL,
+    role           VARCHAR(30) NOT NULL,
+    created_at     TIMESTAMPTZ,
+    deleted_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_by     INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    config     JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO system_settings (id, config)
+VALUES (1, '{"registration_enabled": true, "session_ttl_minutes": 60, "support_email": ""}'::jsonb)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS system_backups (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    config       JSONB NOT NULL,
+    system_state JSONB NOT NULL,
+    created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_backups_created_at
+    ON system_backups(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS course_progress (
     user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -3,15 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#171a1f" />
   <title>LogiAuth · Learning Studio</title>
-  <link rel="stylesheet" href="./style.css?v=logout-safety-2" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/logi.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./style.css?v=mobile-auth-artwork-2" />
   <link rel="stylesheet" href="./auth-security.css?v=1" />
 </head>
 <body>
   <a class="skip-link" href="#dashboard-section">Skip to dashboard content</a>
   <button class="theme-toggle dashboard-theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light mode" aria-pressed="false">
     <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">☀</span>
-    <span id="theme-toggle-label">Light mode</span>
   </button>
   <main class="auth-panel">
     <h1>⛨ LOGI·AUTH</h1>
@@ -27,7 +29,6 @@
     <div class="auth-art">
       <button class="theme-toggle auth-theme-toggle" id="auth-theme-toggle" type="button" aria-label="Switch to light mode" aria-pressed="false">
         <span class="theme-toggle-icon auth-theme-toggle-icon" aria-hidden="true">☀</span>
-        <span class="auth-theme-toggle-label">Light mode</span>
       </button>
       <span class="auth-art-shape auth-art-purple" aria-hidden="true"></span>
       <span class="auth-art-shape auth-art-yellow" aria-hidden="true"></span>
@@ -201,31 +202,48 @@
         </div>
         <div class="header-actions">
           <button class="small-button dashboard-ai-button hidden" id="dashboard-ask-gemini" type="button">✦ Ask Gemini</button>
-          <button class="small-button hidden" id="admin-users-btn" type="button">Manage users</button>
           <button class="icon-button" id="refresh-dashboard-btn" type="button" aria-label="Refresh dashboard">↻</button>
-          <div class="session-actions">
-            <button class="btn logout-button" id="logout-btn" type="button">Log out</button>
-          </div>
         </div>
-        <div class="dashboard-book" id="dashboard-book" aria-hidden="true">
-          <div class="book-spread">
-            <div class="book-page book-page-left">
-              <span class="book-page-mark"></span>
-              <span class="book-page-lines"></span>
+        <div class="dashboard-book-cluster">
+          <button class="btn logout-button dashboard-book-logout" id="logout-btn" type="button">
+            <span class="logout-button-icon" aria-hidden="true">↗</span>
+            <span class="logout-button-label">Log out</span>
+          </button>
+          <div class="dashboard-book" id="dashboard-book" aria-hidden="true">
+            <div class="book-spread">
+              <div class="book-page book-page-left">
+                <span class="book-page-mark"></span>
+                <span class="book-page-lines"></span>
+              </div>
+              <div class="book-page book-page-right">
+                <span class="book-page-lines"></span>
+              </div>
+              <div class="book-page book-page-turn">
+                <span class="book-page-lines"></span>
+                <span class="book-page-back-lines"></span>
+              </div>
+              <span class="book-spine"></span>
             </div>
-            <div class="book-page book-page-right">
-              <span class="book-page-lines"></span>
-            </div>
-            <div class="book-page book-page-turn">
-              <span class="book-page-lines"></span>
-              <span class="book-page-back-lines"></span>
-            </div>
-            <span class="book-spine"></span>
+            <span class="book-cover-edge"></span>
           </div>
-          <span class="book-cover-edge"></span>
         </div>
       </header>
 
+      <div class="dashboard-layout" id="dashboard-layout">
+        <nav class="dashboard-sidebar" id="dashboard-sidebar" aria-label="Dashboard sections">
+          <p class="dashboard-sidebar-heading">WORKSPACE</p>
+          <a class="dashboard-nav-link is-active" href="#admin-monitor-section" data-dashboard-target="admin-monitor-section">Overview</a>
+          <a class="dashboard-nav-link" href="#manager-monitor-section" data-dashboard-target="manager-monitor-section">Manager overview</a>
+          <a class="dashboard-nav-link" href="#admin-users-panel" data-dashboard-target="admin-users-panel">Accounts</a>
+          <a class="dashboard-nav-link" href="#system-backup-panel" data-dashboard-target="system-backup-panel">System settings</a>
+          <a class="dashboard-nav-link" href="#dashboard-stats" data-dashboard-target="dashboard-stats">Progress</a>
+          <a class="dashboard-nav-link" href="#semester-card" data-dashboard-target="semester-card">Semester plan</a>
+          <a class="dashboard-nav-link" href="#dashboard-grid" data-dashboard-target="dashboard-grid">Activity</a>
+          <a class="dashboard-nav-link" href="#coach-card" data-dashboard-target="coach-card">Study coach</a>
+          <a class="dashboard-nav-link" href="#courses-card" data-dashboard-target="courses-card">Courses</a>
+          <a class="dashboard-nav-link" href="#account-security-menu" data-dashboard-target="account-security-menu">Account security</a>
+        </nav>
+        <div class="dashboard-content" id="dashboard-content">
       <section class="admin-monitor hidden" id="admin-monitor-section" aria-label="System monitoring overview">
         <div class="stats-grid admin-stats-grid" id="admin-stats" aria-label="System statistics"></div>
         <div class="admin-charts-grid">
@@ -253,27 +271,106 @@
             </div>
             <div class="admin-course-chart" id="admin-course-chart"></div>
           </section>
+          <section class="dashboard-card admin-chart-card admin-recent-logins-card">
+            <div class="section-heading">
+              <div><p class="eyebrow">ACCOUNT ACTIVITY</p><h3>Recent sign-ins</h3></div>
+            </div>
+            <div class="admin-recent-logins" id="admin-recent-logins" aria-live="polite"></div>
+          </section>
         </div>
+      </section>
+
+      <section class="manager-monitor hidden" id="manager-monitor-section" aria-label="Manager dashboard">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">MANAGEMENT</p>
+            <h3>Workspace overview</h3>
+          </div>
+        </div>
+        <div class="stats-grid admin-stats-grid" id="manager-stats" aria-label="Manager statistics"></div>
       </section>
 
       <section class="dashboard-card admin-users-panel hidden" id="admin-users-panel" aria-labelledby="admin-users-heading">
         <div class="section-heading admin-users-heading">
           <div>
             <p class="eyebrow">ADMINISTRATION</p>
-            <h3 id="admin-users-heading">Account activity</h3>
-            <p class="admin-users-help">Active accounts were seen in the app within the last five minutes. This view is read-only.</p>
+            <h3 id="admin-users-heading">User and role management</h3>
+            <p class="admin-users-help">Create accounts, assign roles, and archive deleted users without erasing their learning records.</p>
+            <p class="admin-credential-audit-note">Credential audit shows hash scheme and salt presence only. Passwords, hashes, and salt values are never displayed; the pepper stays server-side.</p>
           </div>
           <button class="small-button" id="refresh-admin-users-btn" type="button">Refresh users</button>
         </div>
+        <form id="admin-create-user-form" class="admin-create-user-form">
+          <div class="field">
+            <label for="admin-new-username">Username</label>
+            <input id="admin-new-username" minlength="3" maxlength="50" pattern="[A-Za-z0-9_]+" required />
+          </div>
+          <div class="field">
+            <label for="admin-new-email">Email</label>
+            <input id="admin-new-email" type="email" maxlength="120" required />
+          </div>
+          <div class="field">
+            <label for="admin-new-password">Temporary password</label>
+            <input id="admin-new-password" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
+          </div>
+          <div class="field">
+            <label for="admin-new-role">Role</label>
+            <select id="admin-new-role" required>
+              <option value="student">Student</option>
+              <option value="admin">Admin</option>
+              <option value="manager">Manager</option>
+              <option value="editor">Editor</option>
+              <option value="instructor">Instructor</option>
+              <option value="viewer">Viewer</option>
+              <option value="auditor">Auditor</option>
+              <option value="support">Support</option>
+              <option value="content_manager">Content manager</option>
+            </select>
+          </div>
+          <button class="small-button" id="admin-create-user-btn" type="submit">Create account</button>
+        </form>
         <label class="admin-user-search-label" for="admin-user-search">Search users</label>
         <input class="admin-user-search" id="admin-user-search" type="search" autocomplete="off" placeholder="Search name, email, or role" />
         <p class="admin-users-status" id="admin-users-status" role="status" aria-live="polite"></p>
         <div class="admin-users-table-wrap" id="admin-users-table-wrap"></div>
+        <details class="admin-archive">
+          <summary>Archived accounts</summary>
+          <div class="admin-users-table-wrap" id="admin-archived-users-wrap"></div>
+        </details>
+      </section>
+
+      <section class="dashboard-card system-backup-panel hidden" id="system-backup-panel" aria-labelledby="system-backup-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">ADMINISTRATION · CONFIGURATION ONLY</p>
+            <h3 id="system-backup-heading">System state and restore points</h3>
+            <p class="admin-users-help">Restore points save configuration and a read-only state summary. Restoring changes configuration only—not users, roles, courses, or other records.</p>
+          </div>
+          <button class="small-button" id="create-backup-btn" type="button">Save restore point</button>
+        </div>
+        <div class="system-state-grid" id="system-state-summary" aria-live="polite"></div>
+        <form id="system-config-form" class="system-config-form">
+          <label class="system-config-toggle" for="config-registration-enabled">
+            <input id="config-registration-enabled" type="checkbox" />
+            <span>Allow public registration</span>
+          </label>
+          <div class="field">
+            <label for="config-session-ttl">Session duration (minutes)</label>
+            <input id="config-session-ttl" type="number" min="5" max="1440" required />
+          </div>
+          <div class="field">
+            <label for="config-support-email">Support email</label>
+            <input id="config-support-email" type="email" maxlength="120" />
+          </div>
+          <button class="small-button" id="save-system-config-btn" type="submit">Save configuration</button>
+        </form>
+        <p class="admin-users-status" id="system-backup-status" role="status" aria-live="polite"></p>
+        <div class="admin-users-table-wrap" id="system-backups-table-wrap"></div>
       </section>
 
       <div class="stats-grid" id="dashboard-stats" aria-label="Workspace statistics"></div>
 
-      <section class="dashboard-card semester-card" aria-labelledby="semester-heading">
+      <section class="dashboard-card semester-card" id="semester-card" aria-labelledby="semester-heading">
         <div class="section-heading">
           <div>
             <p class="eyebrow">YOUR SEMESTER</p>
@@ -310,7 +407,7 @@
         <div class="semester-exam-list hidden" id="semester-exam-list"></div>
       </section>
 
-      <div class="dashboard-grid">
+      <div class="dashboard-grid" id="dashboard-grid">
         <section class="dashboard-card chart-card">
           <div class="section-heading">
             <div>
@@ -332,7 +429,7 @@
         </section>
       </div>
 
-      <section class="dashboard-card coach-card">
+      <section class="dashboard-card coach-card" id="coach-card">
         <div class="coach-mark" aria-hidden="true">✦</div>
         <div class="coach-content">
           <p class="eyebrow">FILE-BASED STUDY INSIGHTS</p>
@@ -346,7 +443,7 @@
         </div>
       </section>
 
-      <section class="dashboard-card courses-card">
+      <section class="dashboard-card courses-card" id="courses-card">
         <div class="section-heading">
           <div>
             <p class="eyebrow">YOUR LIBRARY</p>
@@ -372,7 +469,7 @@
         <div id="course-list" class="course-list"></div>
       </section>
 
-      <details class="dashboard-card account-security-menu">
+      <details class="dashboard-card account-security-menu" id="account-security-menu">
         <summary class="account-security-summary">
           <span class="account-security-copy">
             <span class="eyebrow">ACCOUNT SECURITY</span>
@@ -422,8 +519,8 @@
         </div>
       </details>
 
-      <div class="dashboard-footer">
-        <button class="btn btn-secondary hidden" id="backup-btn" type="button">Back up users to Supabase</button>
+      <div class="dashboard-footer"></div>
+        </div>
       </div>
     </section>
   </main>
@@ -585,6 +682,6 @@
     <span class="sr-only">Working…</span>
   </div>
 
-  <script src="./app.js?v=passkey-email-grace-4" defer></script>
+  <script src="./app.js?v=dashboard-motion-5" defer></script>
 </body>
 </html>

@@ -1,7 +1,9 @@
 const express = require('express');
 const crypto = require('crypto');
 const dns = require('node:dns').promises;
+const validator = require('validator');
 const pool = require('../db/pool');
+const { isRegistrationEnabled } = require('../utils/system-config');
 const {
   sendLoginCode,
   sendRegistrationCode,
@@ -36,6 +38,17 @@ const {
 } = require('../middleware/rateLimit');
 
 const router = express.Router();
+const USER_ROLES = [
+  'admin',
+  'manager',
+  'editor',
+  'instructor',
+  'student',
+  'viewer',
+  'auditor',
+  'support',
+  'content_manager',
+];
 const OTP_TTL_MS = 5 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
@@ -188,6 +201,9 @@ async function emailDomainCanReceiveMail(domain) {
 
 /* ---------- Account registration ---------- */
 router.post('/register', registrationLimiter, validateRegistrationInput, async (req, res) => {
+  if (!isRegistrationEnabled()) {
+    return res.status(403).json({ error: 'New account registration is currently disabled.' });
+  }
   const username = req.body.username.trim();
   const email = req.body.email.trim().toLowerCase();
   const { password } = req.body;
@@ -312,7 +328,9 @@ router.post('/login', loginLimiter, validateLoginInput, async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, username, email, password_hash, role, passkey_email_grace_until, auth_version FROM users WHERE username = $1',
+      `SELECT id, username, email, password_hash, role, passkey_email_grace_until, auth_version
+       FROM users
+       WHERE username = $1 AND deleted_at IS NULL`,
       [username]
     );
     const user = result.rows[0];
@@ -983,11 +1001,180 @@ router.post('/activity', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/admin/users', requireAuth, requireRole('admin'), async (req, res) => {
+  const { username, email, password, role } = req.body || {};
+  const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (typeof username !== 'string' || !/^[a-zA-Z0-9_]{3,50}$/.test(username.trim())) {
+    return res.status(400).json({ error: 'Username must be 3-50 letters, numbers, or underscores.' });
+  }
+  if (!validator.isEmail(normalizedEmail) || normalizedEmail.length > 120) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
+  }
+  if (typeof password !== 'string' || password.length < 6 || password.length > 128) {
+    return res.status(400).json({ error: 'Password must be 6-128 characters.' });
+  }
+  if (!USER_ROLES.includes(role)) {
+    return res.status(400).json({ error: 'Choose a valid account role.' });
+  }
+
+  try {
+    const { hash, salt } = await hashPassword(password);
+    const result = await pool.query(
+      `INSERT INTO users (username, email, password_hash, salt, role)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING username, email, role, created_at`,
+      [username.trim(), normalizedEmail, hash, salt, role]
+    );
+    res.status(201).json({ user: result.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'That username or email is already registered.' });
+    }
+    console.error('Could not create admin-managed account:', error.message);
+    res.status(500).json({ error: 'Could not create the account.' });
+  }
+});
+
+router.patch('/admin/users/:id/role', requireAuth, requireRole('admin'), async (req, res) => {
+  const userId = Number(req.params.id);
+  const { role } = req.body || {};
+  if (!Number.isSafeInteger(userId) || userId < 1 || !USER_ROLES.includes(role)) {
+    return res.status(400).json({ error: 'Choose a valid account and role.' });
+  }
+  if (userId === Number(req.session.user.id)) {
+    return res.status(400).json({ error: 'You cannot change your own administrator role.' });
+  }
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const account = await client.query(
+        'SELECT id, role FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
+        [userId]
+      );
+      if (!account.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Account not found.' });
+      }
+      if (account.rows[0].role === 'admin' && role !== 'admin') {
+        const count = await client.query(
+          `SELECT COUNT(*)::integer AS count
+           FROM users WHERE role = 'admin' AND deleted_at IS NULL`
+        );
+        if (Number(count.rows[0].count) <= 1) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: 'The system must retain at least one active administrator.' });
+        }
+      }
+      await client.query(
+        'UPDATE users SET role = $1, auth_version = auth_version + 1 WHERE id = $2',
+        [role, userId]
+      );
+      await client.query('COMMIT');
+      res.json({ ok: true, role });
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('Could not roll back role change:', rollbackError.message);
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Could not update account role:', error.message);
+    res.status(500).json({ error: 'Could not update the account role.' });
+  }
+});
+
+router.delete('/admin/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isSafeInteger(userId) || userId < 1) {
+    return res.status(400).json({ error: 'Invalid account ID.' });
+  }
+  if (userId === Number(req.session.user.id)) {
+    return res.status(400).json({ error: 'You cannot delete your own administrator account.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const account = await client.query(
+      `SELECT id, username, email, role, created_at
+       FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [userId]
+    );
+    if (!account.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Account not found.' });
+    }
+    if (account.rows[0].role === 'admin') {
+      const count = await client.query(
+        `SELECT COUNT(*)::integer AS count
+         FROM users WHERE role = 'admin' AND deleted_at IS NULL`
+      );
+      if (Number(count.rows[0].count) <= 1) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'The system must retain at least one active administrator.' });
+      }
+    }
+
+    const user = account.rows[0];
+    await client.query(
+      `INSERT INTO deleted_users (user_id, username, email, role, created_at, deleted_by)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [user.id, user.username, user.email, user.role, user.created_at, req.session.user.id]
+    );
+    await client.query(
+      `UPDATE users
+       SET deleted_at = NOW(), auth_version = auth_version + 1,
+           password_hash = 'revoked', salt = '', twofa_secret = NULL,
+           twofa_enabled = FALSE
+       WHERE id = $1`,
+      [user.id]
+    );
+    await client.query('DELETE FROM passkey_credentials WHERE user_id = $1', [user.id]);
+    await client.query('DELETE FROM user_recovery_codes WHERE user_id = $1', [user.id]);
+    await client.query('COMMIT');
+    res.json({ ok: true, message: 'Account deactivated and archived. Its learning records were preserved.' });
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Could not roll back account archive:', rollbackError.message);
+    }
+    console.error('Could not archive account:', error.message);
+    res.status(500).json({ error: 'Could not archive the account.' });
+  } finally {
+    client.release();
+  }
+});
+
+router.get('/admin/deleted-users', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT username, email, role, created_at, deleted_at
+       FROM deleted_users ORDER BY deleted_at DESC LIMIT 100`
+    );
+    res.json({ users: result.rows });
+  } catch (error) {
+    console.error('Could not load archived accounts:', error.message);
+    res.status(500).json({ error: 'Could not load archived accounts.' });
+  }
+});
+
 router.get('/admin/users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT username, email, role, created_at, last_login, last_activity_at
-       FROM users
+      `SELECT id, username, email, role, created_at, last_login, last_activity_at,
+              CASE
+                WHEN password_hash LIKE 'bcrypt-hmac-sha256$%' THEN 'HMAC-SHA-256 + bcrypt'
+                ELSE 'Legacy bcrypt + pepper'
+              END AS password_scheme,
+              (length(salt) > 0) AS has_user_salt
+       FROM users WHERE deleted_at IS NULL
        ORDER BY created_at DESC, id DESC`
     );
     res.json({ users: result.rows });
@@ -999,15 +1186,23 @@ router.get('/admin/users', requireAuth, requireRole('admin'), async (req, res) =
 
 router.get('/admin/overview', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const [metricsResult, registrationsResult, uploadsResult, rolesResult, coursesResult] = await Promise.all([
+    const [
+      metricsResult,
+      registrationsResult,
+      uploadsResult,
+      rolesResult,
+      coursesResult,
+      recentLoginsResult,
+    ] = await Promise.all([
       pool.query(
         `SELECT
-           (SELECT COUNT(*)::integer FROM users) AS user_count,
-           (SELECT COUNT(*)::integer FROM users WHERE role = 'student') AS student_count,
-           (SELECT COUNT(*)::integer FROM users WHERE role = 'editor') AS editor_count,
-           (SELECT COUNT(*)::integer FROM users WHERE role = 'admin') AS admin_count,
-           (SELECT COUNT(*)::integer FROM users WHERE last_activity_at >= NOW() - INTERVAL '5 minutes') AS active_users,
-           (SELECT COUNT(*)::integer FROM users WHERE created_at >= NOW() - INTERVAL '24 hours') AS new_users_24h,
+           (SELECT COUNT(*)::integer FROM users WHERE deleted_at IS NULL) AS user_count,
+           (SELECT COUNT(*)::integer FROM users WHERE role = 'student' AND deleted_at IS NULL) AS student_count,
+           (SELECT COUNT(*)::integer FROM users WHERE role = 'editor' AND deleted_at IS NULL) AS editor_count,
+           (SELECT COUNT(*)::integer FROM users WHERE role = 'admin' AND deleted_at IS NULL) AS admin_count,
+           (SELECT COUNT(*)::integer FROM users WHERE last_activity_at >= NOW() - INTERVAL '5 minutes' AND deleted_at IS NULL) AS active_users,
+           (SELECT COUNT(*)::integer FROM users WHERE created_at >= NOW() - INTERVAL '24 hours' AND deleted_at IS NULL) AS new_users_24h,
+           (SELECT COUNT(*)::integer FROM deleted_users) AS archived_user_count,
            (SELECT COUNT(*)::integer FROM courses) AS course_count,
            (SELECT COUNT(*)::integer FROM course_slides) AS slide_count,
            (SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM course_slides) AS storage_bytes,
@@ -1024,7 +1219,7 @@ router.get('/admin/overview', requireAuth, requireRole('admin'), async (req, res
          SELECT TO_CHAR(days.day, 'YYYY-MM-DD') AS day,
                 COUNT(users.id)::integer AS count
          FROM days
-         LEFT JOIN users ON users.created_at::date = days.day
+         LEFT JOIN users ON users.created_at::date = days.day AND users.deleted_at IS NULL
          GROUP BY days.day
          ORDER BY days.day`
       ),
@@ -1045,7 +1240,7 @@ router.get('/admin/overview', requireAuth, requireRole('admin'), async (req, res
       ),
       pool.query(
         `SELECT role, COUNT(*)::integer AS count
-         FROM users
+         FROM users WHERE deleted_at IS NULL
          GROUP BY role
          ORDER BY role`
       ),
@@ -1056,6 +1251,13 @@ router.get('/admin/overview', requireAuth, requireRole('admin'), async (req, res
          LEFT JOIN course_slides s ON s.course_id = c.id
          GROUP BY c.id
          ORDER BY COUNT(s.id) DESC, c.title
+         LIMIT 6`
+      ),
+      pool.query(
+        `SELECT username, role, last_login, last_activity_at
+         FROM users
+         WHERE deleted_at IS NULL AND last_login IS NOT NULL
+         ORDER BY last_login DESC
          LIMIT 6`
       ),
     ]);
@@ -1072,10 +1274,31 @@ router.get('/admin/overview', requireAuth, requireRole('admin'), async (req, res
         slideCount: Number(row.slide_count),
         storageBytes: Number(row.storage_bytes),
       })),
+      recentLogins: recentLoginsResult.rows,
     });
   } catch (error) {
     console.error('Could not load admin monitoring overview:', error.message);
     res.status(500).json({ error: 'Could not load system monitoring data.' });
+  }
+});
+
+router.get('/manager/overview', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         (SELECT COUNT(*)::integer FROM users WHERE deleted_at IS NULL) AS user_count,
+         (SELECT COUNT(*)::integer FROM users WHERE role = 'student' AND deleted_at IS NULL) AS student_count,
+         (SELECT COUNT(*)::integer FROM courses) AS course_count,
+         (SELECT COUNT(*)::integer FROM course_slides) AS slide_count`
+    );
+    res.json({
+      metrics: Object.fromEntries(
+        Object.entries(result.rows[0]).map(([key, value]) => [key, Number(value)])
+      ),
+    });
+  } catch (error) {
+    console.error('Could not load manager dashboard:', error.message);
+    res.status(500).json({ error: 'Could not load manager dashboard data.' });
   }
 });
 

@@ -4,7 +4,6 @@ const REQUIRED_PRODUCTION_VALUES = [
   'PEPPER',
   'REDIS_URL',
   'SESSION_SECRET',
-  'SUPABASE_URL',
   'DATABASE_CA_CERT_BASE64',
 ];
 
@@ -12,16 +11,10 @@ function validateProductionEnv(env = process.env) {
   if (env.NODE_ENV !== 'production') return;
 
   const databaseUrl = env.DATABASE_URL || env.POSTGRES_PRISMA_URL || env.POSTGRES_URL;
-  const supabaseServiceKey = env.SUPABASE_SERVICE_KEY ||
-    env.SUPABASE_SERVICE_ROLE_KEY ||
-    env.SUPABASE_SECRET_KEY;
   const missing = [
     ...REQUIRED_PRODUCTION_VALUES.filter((name) => !env[name]?.trim()),
     ...(!databaseUrl?.trim()
       ? ['DATABASE_URL, POSTGRES_PRISMA_URL, or POSTGRES_URL']
-      : []),
-    ...(!supabaseServiceKey?.trim()
-      ? ['SUPABASE_SERVICE_KEY, SUPABASE_SERVICE_ROLE_KEY, or SUPABASE_SECRET_KEY']
       : []),
   ];
   const weak = ['PEPPER', 'SESSION_SECRET'].filter(

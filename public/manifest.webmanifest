@@ -1,0 +1,17 @@
+{
+  "name": "LogiAuth Learning Studio",
+  "short_name": "LogiAuth",
+  "description": "A responsive learning and account-management workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#171a1f",
+  "theme_color": "#171a1f",
+  "icons": [
+    {
+      "src": "/icons/logi.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

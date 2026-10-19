@@ -7,6 +7,8 @@ const path = require('path');
 const { RedisStore } = require('connect-redis');
 const { connectRedis } = require('./utils/redis');
 const { validateProductionEnv } = require('./utils/validate-production-env');
+const pool = require('./db/pool');
+const { loadSystemConfig, getSystemConfig } = require('./utils/system-config');
 
 const app = express();
 
@@ -27,6 +29,7 @@ async function configureApp() {
   if (process.env.NODE_ENV === 'production' && !redisClient) {
     throw new Error('REDIS_URL is required in production for shared sessions and rate limits.');
   }
+  await loadSystemConfig(pool);
 
   const authRoutes = require('./routes/auth');
   const backupRoutes = require('./routes/backup');
@@ -49,9 +52,13 @@ async function configureApp() {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 1000 * 60 * 60,
+      maxAge: getSystemConfig().session_ttl_minutes * 60 * 1000,
     },
   }));
+  app.use((req, res, next) => {
+    req.session.cookie.maxAge = getSystemConfig().session_ttl_minutes * 60 * 1000;
+    next();
+  });
 
   app.use(express.static(path.join(__dirname, 'public'), {
     etag: true,

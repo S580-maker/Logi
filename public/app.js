@@ -4,6 +4,17 @@ const networkErrorMessage = location.protocol === 'file:'
   : 'We couldn’t connect to LogiAuth. Check your internet connection and try again. If it keeps happening, refresh the page.';
 let messageTimer;
 let currentUser;
+const accountRoles = [
+  'admin',
+  'manager',
+  'editor',
+  'instructor',
+  'student',
+  'viewer',
+  'auditor',
+  'support',
+  'content_manager',
+];
 let verificationPurpose = 'login';
 let passwordResetCode = '';
 let pendingPasskeyOptions;
@@ -24,10 +35,8 @@ let activeBookLoadCount = 0;
 let smallLoadingTimer;
 const nativeFetch = window.fetch.bind(window);
 const themeToggle = $('theme-toggle');
-const themeToggleLabel = $('theme-toggle-label');
 const themeToggleIcon = $('theme-toggle-icon');
 const authThemeToggle = $('auth-theme-toggle');
-const authThemeToggleLabel = authThemeToggle.querySelector('.auth-theme-toggle-label');
 const authThemeToggleIcon = authThemeToggle.querySelector('.auth-theme-toggle-icon');
 const THEME_STORAGE_KEY = 'logiauth-theme';
 let authThemeAnimationTimer;
@@ -95,9 +104,7 @@ function setTheme(theme, persist = false) {
     toggle.setAttribute('aria-pressed', String(isLight));
     toggle.setAttribute('aria-label', `Switch to ${isLight ? 'dark' : 'light'} mode`);
   });
-  themeToggleLabel.textContent = isLight ? 'Dark mode' : 'Light mode';
   themeToggleIcon.textContent = isLight ? '☾' : '☀';
-  authThemeToggleLabel.textContent = isLight ? 'Dark mode' : 'Light mode';
   authThemeToggleIcon.textContent = isLight ? '☾' : '☀';
   if (persist) {
     try {
@@ -514,6 +521,8 @@ const showDashboard = (user) => {
   hideAll();
   document.body.classList.add('dashboard-page');
   document.body.classList.toggle('is-admin', user.role === 'admin');
+  document.body.classList.toggle('is-manager', user.role === 'manager');
+  document.body.classList.toggle('is-readonly', ['viewer', 'auditor', 'support'].includes(user.role));
   document.querySelector('.auth-panel').classList.add('dashboard-open');
   $('dashboard-section').classList.remove('hidden');
   $('recovery-codes-output').classList.add('hidden');
@@ -524,21 +533,208 @@ const showDashboard = (user) => {
   $('dashboard-title').replaceChildren(
     ...(user.role === 'admin'
       ? [document.createTextNode('System overview')]
-      : [document.createTextNode(`Welcome, ${user.username}`)])
+      : user.role === 'manager'
+        ? [document.createTextNode('Manager dashboard')]
+        : [document.createTextNode(`Welcome, ${user.username}`)])
   );
-  $('role-badge').textContent = user.role === 'admin' ? 'ADMINISTRATOR · READ ONLY' : user.role.toUpperCase();
-  $('backup-btn').classList.add('hidden');
-  $('admin-users-btn').classList.toggle('hidden', user.role !== 'admin');
-  $('admin-users-btn').textContent = 'View accounts';
-  $('admin-users-btn').setAttribute('aria-expanded', 'false');
+  $('role-badge').textContent = user.role === 'admin' ? 'ADMINISTRATOR' : user.role.toUpperCase();
   $('admin-users-panel').classList.add('hidden');
   $('admin-monitor-section').classList.toggle('hidden', user.role !== 'admin');
-  $('show-course-form-btn').classList.toggle('hidden', user.role === 'admin');
+  $('manager-monitor-section').classList.toggle('hidden', user.role !== 'manager');
+  $('system-backup-panel').classList.toggle('hidden', user.role !== 'admin');
+  renderDashboardNavigation(user);
+  $('show-course-form-btn').classList.toggle(
+    'hidden',
+    !['manager', 'editor', 'instructor', 'content_manager', 'student'].includes(user.role)
+  );
+  adminUsers = [];
+  setDashboardTab(user.role === 'admin' ? 'admin-monitor-section'
+    : user.role === 'manager' ? 'manager-monitor-section'
+      : 'dashboard-stats');
   clearInterval(activityHeartbeat);
   updateUserActivity();
   activityHeartbeat = setInterval(updateUserActivity, 60_000);
   loadDashboard();
 };
+
+function renderDashboardNavigation(user) {
+  const adminItems = [
+    ['admin-monitor-section', 'Overview'],
+    ['admin-users-panel', 'Accounts'],
+    ['system-backup-panel', 'System settings'],
+  ];
+  const workspaceItems = [
+    ...(user.role === 'manager' ? [['manager-monitor-section', 'Overview']] : []),
+    ...(user.role === 'manager' ? [] : [['dashboard-stats', 'Overview']]),
+    ...(user.role === 'manager' ? [['dashboard-stats', 'Progress']] : []),
+    ['semester-card', 'Semester plan'],
+    ['dashboard-grid', 'Activity'],
+    ['coach-card', 'Study coach'],
+    ['courses-card', 'Courses'],
+    ['account-security-menu', 'Account security'],
+  ];
+  const items = user.role === 'admin' ? adminItems : workspaceItems;
+  const sidebar = $('dashboard-sidebar');
+  items.forEach(([target]) => document.getElementById(target)?.classList.remove('hidden'));
+  sidebar.setAttribute('role', 'tablist');
+  sidebar.setAttribute(
+    'aria-orientation',
+    window.matchMedia('(max-width: 760px)').matches ? 'horizontal' : 'vertical'
+  );
+  sidebar.replaceChildren(
+    element('p', 'dashboard-sidebar-heading', 'WORKSPACE'),
+    ...items.map(([target, label], index) => {
+      const link = element('a', `dashboard-nav-link${index === 0 ? ' is-active' : ''}`, label);
+      link.href = `#${target}`;
+      link.dataset.dashboardTarget = target;
+      link.id = `dashboard-tab-${target}`;
+      link.setAttribute('role', 'tab');
+      link.setAttribute('aria-controls', target);
+      link.setAttribute('aria-selected', String(index === 0));
+      link.tabIndex = index === 0 ? 0 : -1;
+      return link;
+    })
+  );
+}
+
+function setDashboardTab(targetId) {
+  const target = document.getElementById(targetId);
+  const tab = [...document.querySelectorAll('.dashboard-nav-link')]
+    .find((link) => link.dataset.dashboardTarget === targetId);
+  if (!target || !tab) return;
+
+  clearDashboardTilt();
+  const previousTarget = [...document.querySelectorAll('.dashboard-nav-link')]
+    .find((link) => link.getAttribute('aria-selected') === 'true')?.dataset.dashboardTarget;
+  const panels = [...$('dashboard-content').children]
+    .filter((panel) => panel.id && [...document.querySelectorAll('.dashboard-nav-link')]
+      .some((link) => link.dataset.dashboardTarget === panel.id));
+  panels.forEach((panel) => {
+    panel.classList.toggle('hidden', panel !== target);
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', `dashboard-tab-${panel.id}`);
+    panel.tabIndex = 0;
+  });
+  document.querySelectorAll('.dashboard-nav-link').forEach((link) => {
+    const isSelected = link === tab;
+    link.classList.toggle('is-active', isSelected);
+    link.setAttribute('aria-selected', String(isSelected));
+    link.tabIndex = isSelected ? 0 : -1;
+  });
+  if (previousTarget !== targetId && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    target.classList.remove('dashboard-panel-enter');
+    void target.offsetWidth;
+    target.classList.add('dashboard-panel-enter');
+    const clearPanelAnimation = (event) => {
+      if (event && event.target !== target) return;
+      target.classList.remove('dashboard-panel-enter');
+      target.removeEventListener('animationend', clearPanelAnimation);
+      window.clearTimeout(animationCleanup);
+    };
+    target.addEventListener('animationend', clearPanelAnimation);
+    const animationCleanup = window.setTimeout(() => clearPanelAnimation(), 500);
+  }
+  animateStatValues(target);
+  history.replaceState(null, '', `#${targetId}`);
+}
+
+function animateStatValues(root) {
+  if (!root.getClientRects().length) return;
+
+  root.querySelectorAll('.stat-value').forEach((valueElement) => {
+    if (valueElement.dataset.counting === 'true') return;
+    const targetText = valueElement.textContent.trim();
+    const match = targetText.match(/^(-?[\d,]+(?:\.\d+)?)(.*)$/);
+    if (!match) return;
+    const targetValue = Number(match[1].replaceAll(',', ''));
+    if (!Number.isFinite(targetValue)) return;
+
+    valueElement.dataset.counting = 'true';
+    valueElement.setAttribute('aria-label', targetText);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const decimals = (match[1].split('.')[1] || '').length;
+    const suffix = match[2];
+    const formatter = new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+    const startTime = performance.now();
+    const duration = 850;
+    const update = (now) => {
+      const progress = Math.min(1, (now - startTime) / duration);
+      const easedProgress = 1 - (1 - progress) ** 3;
+      const currentValue = targetValue * easedProgress;
+      valueElement.textContent = `${formatter.format(currentValue)}${suffix}`;
+      if (progress < 1) {
+        requestAnimationFrame(update);
+      } else {
+        valueElement.textContent = targetText;
+      }
+    };
+    requestAnimationFrame(update);
+  });
+}
+
+$('dashboard-sidebar').addEventListener('click', (event) => {
+  const link = event.target.closest('.dashboard-nav-link');
+  if (!link) return;
+  const target = document.getElementById(link.dataset.dashboardTarget);
+  if (!target) return;
+  event.preventDefault();
+  setDashboardTab(target.id);
+});
+
+const dashboardTiltTargets = '.stats-grid > .stat-card';
+const dashboardLayout = $('dashboard-layout');
+let activeDashboardTilt;
+
+function clearDashboardTilt() {
+  if (!activeDashboardTilt) return;
+  activeDashboardTilt.classList.remove('dashboard-tilt-active');
+  activeDashboardTilt.style.removeProperty('--dashboard-tilt-x');
+  activeDashboardTilt.style.removeProperty('--dashboard-tilt-y');
+  activeDashboardTilt = null;
+}
+
+dashboardLayout.addEventListener('pointermove', (event) => {
+  if (event.pointerType === 'touch' ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const target = event.target.closest(dashboardTiltTargets);
+  if (!target || !dashboardLayout.contains(target)) {
+    clearDashboardTilt();
+    return;
+  }
+  if (activeDashboardTilt !== target) {
+    clearDashboardTilt();
+    activeDashboardTilt = target;
+    target.classList.add('dashboard-tilt-active');
+  }
+
+  const bounds = target.getBoundingClientRect();
+  const xOffset = (event.clientX - bounds.left) / bounds.width - 0.5;
+  const yOffset = (event.clientY - bounds.top) / bounds.height - 0.5;
+  target.style.setProperty('--dashboard-tilt-x', `${-yOffset * 4}deg`);
+  target.style.setProperty('--dashboard-tilt-y', `${xOffset * 4}deg`);
+});
+
+dashboardLayout.addEventListener('pointerleave', clearDashboardTilt);
+
+$('dashboard-sidebar').addEventListener('keydown', (event) => {
+  const horizontal = window.matchMedia('(max-width: 760px)').matches;
+  const forwardKey = horizontal ? 'ArrowRight' : 'ArrowDown';
+  const backwardKey = horizontal ? 'ArrowLeft' : 'ArrowUp';
+  if (![forwardKey, backwardKey, 'Home', 'End'].includes(event.key)) return;
+  const tabs = [...$('dashboard-sidebar').querySelectorAll('.dashboard-nav-link')];
+  const activeIndex = tabs.indexOf(document.activeElement);
+  if (activeIndex < 0) return;
+  event.preventDefault();
+  const nextIndex = event.key === 'Home' ? 0
+    : event.key === 'End' ? tabs.length - 1
+      : (activeIndex + (event.key === forwardKey ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[nextIndex].focus();
+  setDashboardTab(tabs[nextIndex].dataset.dashboardTarget);
+});
 
 async function updateUserActivity() {
   if (!currentUser) return;
@@ -602,17 +798,15 @@ function renderAdminBarChart(root, rows) {
 }
 
 function renderAdminOverview(data) {
-  const { metrics, registrations, uploads, roles, courses } = data;
+  const { metrics, registrations, uploads, roles, courses, recentLogins = [] } = data;
   const cards = [
-    ['Total accounts', metrics.user_count, `${metrics.new_users_24h} new in 24 hours`],
-    ['Active now', metrics.active_users, 'Seen within the last 5 minutes'],
-    ['Successful logins', metrics.successful_logins_24h, 'Last 24 hours'],
-    ['Courses monitored', metrics.course_count, 'Across the system'],
-    ['Slide files', metrics.slide_count, 'Across all courses'],
-    ['Storage used', formatBytes(metrics.storage_bytes), 'Uploaded slide materials'],
+    ['Accounts', metrics.user_count, `${metrics.new_users_24h} new · ${metrics.archived_user_count} archived`],
+    ['Activity', metrics.active_users, `active · ${metrics.successful_logins_24h} sign-ins today`],
+    ['Learning', metrics.course_count, `courses · ${metrics.slide_count} slide files`],
+    ['Storage', formatBytes(metrics.storage_bytes), 'uploaded materials'],
   ];
   $('admin-stats').replaceChildren(...cards.map(([label, value, hint]) => {
-    const card = element('article', 'stat-card admin-stat-card');
+    const card = element('article', 'stat-card admin-stat-card admin-summary-card');
     card.append(
       element('span', 'stat-label', label),
       element('strong', 'stat-value', String(value ?? 0)),
@@ -620,6 +814,7 @@ function renderAdminOverview(data) {
     );
     return card;
   }));
+  animateStatValues($('admin-monitor-section'));
 
   renderAdminBarChart($('admin-registration-chart'), registrations);
   renderAdminBarChart($('admin-upload-chart'), uploads);
@@ -657,6 +852,31 @@ function renderAdminOverview(data) {
     return row;
   }));
   if (!courses.length) $('admin-course-chart').append(element('p', 'empty-state', 'No courses found.'));
+
+  const recentLoginRoot = $('admin-recent-logins');
+  if (!recentLogins.length) {
+    recentLoginRoot.replaceChildren(element('p', 'empty-state', 'No completed sign-ins yet.'));
+    return;
+  }
+  recentLoginRoot.replaceChildren(...recentLogins.map((login) => {
+    const item = element('article', 'admin-recent-login');
+    const account = element('div', 'admin-recent-login-account');
+    account.append(
+      element('strong', '', login.username),
+      element('span', '', login.role.replaceAll('_', ' '))
+    );
+    const activity = element('div', 'admin-recent-login-time');
+    activity.append(
+      element('time', '', formatDate(login.last_login)),
+      element(
+        'span',
+        '',
+        login.last_activity_at ? `Last active ${formatDate(login.last_activity_at)}` : 'No recent activity'
+      )
+    );
+    item.append(account, activity);
+    return item;
+  }));
 }
 
 async function loadDashboard() {
@@ -668,7 +888,11 @@ async function loadDashboard() {
       if (!response.ok) throw new Error(data.error || 'Could not load system monitoring data.');
       renderAdminOverview(data);
       await loadAdminUsers();
+      await Promise.all([loadManagerOverview(), loadSystemStatus()]);
       return;
+    }
+    if (currentUser.role === 'manager') {
+      await loadManagerOverview();
     }
     const response = await fetch('/api/study/dashboard', { credentials: 'same-origin' });
     const data = await response.json();
@@ -687,6 +911,27 @@ async function loadDashboard() {
   }
 }
 
+async function loadManagerOverview() {
+  const response = await fetch('/api/auth/manager/overview', { credentials: 'same-origin' });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Could not load manager dashboard.');
+  const cards = [
+    ['Accounts', data.metrics.user_count, 'Current accounts'],
+    ['Students', data.metrics.student_count, 'Student accounts'],
+    ['Learning', data.metrics.course_count, `courses · ${data.metrics.slide_count} slides`],
+  ];
+  $('manager-stats').replaceChildren(...cards.map(([label, value, hint]) => {
+    const card = element('article', 'stat-card admin-stat-card admin-summary-card');
+    card.append(
+      element('span', 'stat-label', label),
+      element('strong', 'stat-value', String(value ?? 0)),
+      element('span', 'stat-hint', hint)
+    );
+    return card;
+  }));
+  animateStatValues($('manager-monitor-section'));
+}
+
 function renderDashboard(data) {
   const { stats, courses, recentSlides } = data;
   const cards = [
@@ -701,6 +946,7 @@ function renderDashboard(data) {
     card.append(element('span', 'stat-label', label), element('strong', 'stat-value', value ?? '—'), element('span', 'stat-hint', hint));
     return card;
   }));
+  animateStatValues(statsRoot);
 
   renderCourseChart(courses);
   renderCourses(courses);
@@ -724,6 +970,7 @@ async function loadAdminUsers() {
     adminUsers = data.users;
     renderAdminUsers();
     status.textContent = `${adminUsers.length} ${adminUsers.length === 1 ? 'account' : 'accounts'}`;
+    await loadArchivedUsers();
   } catch (error) {
     status.textContent = error.message || 'Could not load users.';
     $('admin-users-table-wrap').replaceChildren();
@@ -740,7 +987,7 @@ function renderAdminUsers() {
   const table = element('table', 'admin-users-table');
   const head = element('thead');
   const headerRow = element('tr');
-  ['Account', 'Role', 'Joined', 'Last login', 'Activity'].forEach((label) => {
+  ['Account', 'Role', 'Credential audit', 'Joined', 'Last login', 'Activity', 'Actions'].forEach((label) => {
     headerRow.append(element('th', '', label));
   });
   head.append(headerRow);
@@ -756,12 +1003,38 @@ function renderAdminUsers() {
     const activityBadge = element('span', `admin-activity-badge${isActive ? ' is-active' : ''}`,
       isActive ? 'Active · last 5 min' : user.last_activity_at ? `Last seen ${formatDate(user.last_activity_at)}` : 'Not seen yet');
     activity.append(activityBadge);
+    const credentialAudit = element('td', 'admin-credential-audit');
+    const scheme = element('strong', '', user.password_scheme);
+    const saltStatus = element(
+      'span',
+      user.has_user_salt ? 'admin-salt-status is-present' : 'admin-salt-status',
+      user.has_user_salt ? 'Per-user salt present' : 'No separate salt record'
+    );
+    credentialAudit.append(scheme, saltStatus);
+    const roleCell = element('td');
+    const roleSelect = element('select', 'admin-role-select');
+    roleSelect.setAttribute('aria-label', `Role for ${user.username}`);
+    accountRoles.forEach((role) => {
+      const option = element('option', '', role.replaceAll('_', ' '));
+      option.value = role;
+      option.selected = role === user.role;
+      roleSelect.append(option);
+    });
+    roleSelect.addEventListener('change', () => updateAdminUserRole(user, roleSelect));
+    roleCell.append(roleSelect);
+    const actions = element('td');
+    const deleteButton = element('button', 'small-button admin-delete-user', 'Archive');
+    deleteButton.type = 'button';
+    deleteButton.addEventListener('click', () => archiveAdminUser(user));
+    actions.append(deleteButton);
     row.append(
       account,
-      element('td', 'admin-user-role', user.role),
+      roleCell,
+      credentialAudit,
       element('td', '', formatDate(user.created_at)),
       element('td', '', user.last_login ? formatDate(user.last_login) : 'Never'),
-      activity
+      activity,
+      actions
     );
     body.append(row);
   });
@@ -769,7 +1042,7 @@ function renderAdminUsers() {
   if (!users.length) {
     const row = element('tr');
     const cell = element('td', 'admin-users-empty', query ? 'No users match your search.' : 'No accounts found.');
-    cell.colSpan = 5;
+    cell.colSpan = 7;
     row.append(cell);
     body.append(row);
   }
@@ -778,15 +1051,247 @@ function renderAdminUsers() {
   $('admin-users-table-wrap').replaceChildren(table);
 }
 
-$('admin-users-btn').addEventListener('click', () => {
-  const isOpen = $('admin-users-panel').classList.contains('hidden');
-  $('admin-users-panel').classList.toggle('hidden', !isOpen);
-  $('admin-users-btn').textContent = isOpen ? 'Hide accounts' : 'View accounts';
-  $('admin-users-btn').setAttribute('aria-expanded', String(isOpen));
-  if (isOpen && !adminUsers.length) loadAdminUsers();
-});
 $('refresh-admin-users-btn').addEventListener('click', loadAdminUsers);
 $('admin-user-search').addEventListener('input', renderAdminUsers);
+
+async function loadArchivedUsers() {
+  const root = $('admin-archived-users-wrap');
+  try {
+    const response = await fetch('/api/auth/admin/deleted-users', { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load archived accounts.');
+    const table = element('table', 'admin-users-table');
+    const head = element('thead');
+    const header = element('tr');
+    ['Account', 'Role', 'Joined', 'Archived'].forEach((label) => header.append(element('th', '', label)));
+    head.append(header);
+    const body = element('tbody');
+    data.users.forEach((user) => {
+      const row = element('tr');
+      const account = element('td', 'admin-user-account');
+      account.append(element('strong', '', user.username), element('span', '', user.email));
+      row.append(
+        account,
+        element('td', 'admin-user-role', user.role.replaceAll('_', ' ')),
+        element('td', '', formatDate(user.created_at)),
+        element('td', '', formatDate(user.deleted_at))
+      );
+      body.append(row);
+    });
+    if (!data.users.length) {
+      const row = element('tr');
+      const cell = element('td', 'admin-users-empty', 'No archived accounts.');
+      cell.colSpan = 4;
+      row.append(cell);
+      body.append(row);
+    }
+    table.append(head, body);
+    root.replaceChildren(table);
+  } catch (error) {
+    root.replaceChildren(element('p', 'admin-users-status', error.message || 'Could not load archived accounts.'));
+  }
+}
+
+async function updateAdminUserRole(user, select) {
+  const previousRole = user.role;
+  select.disabled = true;
+  try {
+    const response = await fetch(`/api/auth/admin/users/${user.id}/role`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ role: select.value }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not update this role.');
+    user.role = data.role;
+    showMessage(`${user.username}'s role was updated. Their next request will require signing in again.`, 'success');
+  } catch (error) {
+    select.value = previousRole;
+    showMessage(error.message || networkErrorMessage, 'error');
+  } finally {
+    select.disabled = false;
+  }
+}
+
+async function archiveAdminUser(user) {
+  if (!window.confirm(`Archive ${user.username}? They will lose access, and their learning records will be preserved.`)) return;
+  try {
+    const response = await fetch(`/api/auth/admin/users/${user.id}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not archive this account.');
+    showMessage(data.message, 'success');
+    await loadAdminUsers();
+    await loadSystemStatus();
+  } catch (error) {
+    showMessage(error.message || networkErrorMessage, 'error');
+  }
+}
+
+$('admin-create-user-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('admin-create-user-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/auth/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        username: $('admin-new-username').value,
+        email: $('admin-new-email').value,
+        password: $('admin-new-password').value,
+        role: $('admin-new-role').value,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not create this account.');
+    $('admin-create-user-form').reset();
+    showMessage(`Created ${data.user.role.replaceAll('_', ' ')} account ${data.user.username}.`, 'success');
+    await loadAdminUsers();
+    await loadSystemStatus();
+  } catch (error) {
+    showMessage(error.message || networkErrorMessage, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+async function loadSystemStatus() {
+  const status = $('system-backup-status');
+  status.textContent = 'Loading current system state…';
+  try {
+    const response = await fetch('/api/system/status', { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load system status.');
+    $('config-registration-enabled').checked = data.config.registration_enabled;
+    $('config-session-ttl').value = data.config.session_ttl_minutes;
+    $('config-support-email').value = data.config.support_email;
+    const stateCards = [
+      ['Active users', data.state.users],
+      ['Archived users', data.state.deleted_users],
+      ['Courses', data.state.courses],
+      ['Slide records', data.state.slides],
+      ['Active roles', Object.keys(data.state.roles || {}).length],
+    ];
+    $('system-state-summary').replaceChildren(...stateCards.map(([label, value]) => {
+      const card = element('article', 'stat-card admin-stat-card');
+      card.append(element('span', 'stat-label', label), element('strong', 'stat-value', String(value)));
+      return card;
+    }));
+    renderSystemBackups(data.backups);
+    status.textContent = `Current state as of ${formatDate(new Date().toISOString())}. Restore points change configuration only.`;
+  } catch (error) {
+    status.textContent = error.message || 'Could not load system state.';
+    $('system-backups-table-wrap').replaceChildren();
+  }
+}
+
+function renderSystemBackups(backups) {
+  const table = element('table', 'admin-users-table');
+  const header = element('thead');
+  const headerRow = element('tr');
+  ['Saved', 'Created by', 'System state', 'Configuration', 'Action'].forEach((label) => {
+    headerRow.append(element('th', '', label));
+  });
+  header.append(headerRow);
+  const body = element('tbody');
+  backups.forEach((backup) => {
+    const row = element('tr');
+    const state = backup.system_state;
+    const roleSummary = Object.entries(state.roles || {})
+      .map(([role, count]) => `${role.replaceAll('_', ' ')}: ${count}`)
+      .join(', ') || 'No active roles';
+    const stateText = `${state.users} users · ${state.courses} courses · ${state.slides} slides · ${roleSummary}`;
+    const configText = `${backup.config.registration_enabled ? 'Registration on' : 'Registration off'} · ${backup.config.session_ttl_minutes} min session`;
+    const action = element('td');
+    const restore = element('button', 'small-button', 'Restore configuration');
+    restore.type = 'button';
+    restore.addEventListener('click', () => restoreSystemBackup(backup));
+    action.append(restore);
+    row.append(
+      element('td', '', formatDate(backup.created_at)),
+      element('td', '', backup.created_by || 'Unknown'),
+      element('td', '', stateText),
+      element('td', '', configText),
+      action
+    );
+    body.append(row);
+  });
+  if (!backups.length) {
+    const row = element('tr');
+    const cell = element('td', 'admin-users-empty', 'No restore points have been saved.');
+    cell.colSpan = 5;
+    row.append(cell);
+    body.append(row);
+  }
+  table.append(header, body);
+  $('system-backups-table-wrap').replaceChildren(table);
+}
+
+async function restoreSystemBackup(backup) {
+  if (!window.confirm('Restore this configuration? User accounts, roles, courses, and other records will not be changed.')) return;
+  try {
+    const response = await fetch(`/api/backup/${backup.id}/restore`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not restore configuration.');
+    showMessage(data.message, 'success');
+    await loadSystemStatus();
+  } catch (error) {
+    showMessage(error.message || networkErrorMessage, 'error');
+  }
+}
+
+$('system-config-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('save-system-config-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/system/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        registration_enabled: $('config-registration-enabled').checked,
+        session_ttl_minutes: Number($('config-session-ttl').value),
+        support_email: $('config-support-email').value,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save configuration.');
+    showMessage('System configuration saved.', 'success');
+    await loadSystemStatus();
+  } catch (error) {
+    showMessage(error.message || networkErrorMessage, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('create-backup-btn').addEventListener('click', async () => {
+  const button = $('create-backup-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/backup', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save a restore point.');
+    showMessage('Configuration restore point saved.', 'success');
+    await loadSystemStatus();
+  } catch (error) {
+    showMessage(error.message || networkErrorMessage, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
 
 async function loadSemesterPlanner() {
   const options = $('semester-course-options');
@@ -2497,30 +3002,20 @@ $('reader-complete-btn').addEventListener('click', async () => {
   }
 });
 
-/* --- Backup (admin) --- */
-$('backup-btn').addEventListener('click', async () => {
-  $('backup-btn').disabled = true;
-  showMessage('Backing up to Supabase…', 'info');
-  try {
-    const r = await fetch('/api/backup', {
-      method: 'POST',
-      credentials: 'same-origin',
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Backup failed.');
-    showMessage('☁️ Backup complete!', 'success');
-  } catch (error) {
-    showMessage(error.message || networkErrorMessage, 'error');
-  } finally {
-    $('backup-btn').disabled = false;
-  }
-});
-
 /* --- Logout --- */
 $('logout-btn').addEventListener('click', async () => {
   if (!window.confirm('Log out of LogiAuth? You can sign in again at any time.')) return;
 
-  $('logout-btn').disabled = true;
+  const logoutButton = $('logout-btn');
+  const logoutLabel = logoutButton.querySelector('.logout-button-label');
+  logoutButton.disabled = true;
+  logoutButton.classList.add('is-logging-out');
+  logoutButton.setAttribute('aria-busy', 'true');
+  logoutLabel.textContent = 'Signing out…';
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    dashboardBook.classList.add('is-page-turning');
+    await new Promise((resolve) => window.setTimeout(resolve, 360));
+  }
   try {
     const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
     if (!response.ok) throw new Error('Could not log out.');
@@ -2531,7 +3026,11 @@ $('logout-btn').addEventListener('click', async () => {
   } catch (error) {
     showMessage(error.message || networkErrorMessage, 'error');
   } finally {
-    $('logout-btn').disabled = false;
+    logoutButton.disabled = false;
+    logoutButton.classList.remove('is-logging-out');
+    logoutButton.removeAttribute('aria-busy');
+    logoutLabel.textContent = 'Log out';
+    dashboardBook.classList.remove('is-page-turning');
   }
 });
 
@@ -2557,3 +3056,8 @@ $('logout-btn').addEventListener('click', async () => {
     showMessage(networkErrorMessage, 'error');
   }
 })();
+
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('/service-worker.js')
+    .catch((error) => console.error('Could not enable the installable app shell:', error));
+}
