@@ -7,7 +7,7 @@
   <title>LogiAuth · Learning Studio</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/logi.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./style.css?v=mobile-auth-artwork-2" />
+  <link rel="stylesheet" href="./style.css?v=password-reset-email-only-2" />
   <link rel="stylesheet" href="./auth-security.css?v=1" />
 </head>
 <body>
@@ -152,11 +152,7 @@
         <button class="btn btn-secondary" id="back-btn" type="button">Back to sign in</button>
       </div>
       <form id="reset-password-form" class="hidden">
-        <div class="field">
-          <label for="reset-recovery-code">Saved recovery code</label>
-          <input type="text" id="reset-recovery-code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" required />
-          <p class="field-help">This is required in addition to the email code.</p>
-        </div>
+        <p class="field-help">Your verified email code is enough to reset your password. You do not need a saved recovery code.</p>
         <div class="field">
           <label for="reset-new-password">New password</label>
           <input type="password" id="reset-new-password" autocomplete="new-password" minlength="6" maxlength="128" required />
@@ -166,13 +162,14 @@
           <input type="password" id="reset-confirm-password" autocomplete="new-password" minlength="6" maxlength="128" required />
         </div>
         <button class="text-button" id="reset-code-back-btn" type="button">Use a different code</button>
+        <p id="reset-password-error" class="reset-password-error hidden" role="alert" aria-live="assertive"></p>
         <button class="btn" id="reset-password-btn" type="submit">Reset password</button>
       </form>
     </section>
 
     <section id="forgot-password-section" class="auth-form-panel hidden" aria-labelledby="forgot-password-title">
       <h2 id="forgot-password-title">Reset your password</h2>
-      <p class="field-help">We’ll email a one-time code to the address on your account.</p>
+      <p class="field-help">We’ll email a one-time code if the address belongs to an account. Verify that code to choose a new password; no saved recovery code is needed.</p>
       <form id="forgot-password-form">
         <div class="field">
           <label for="forgot-email">Email</label>
@@ -201,7 +198,10 @@
           <span class="role-badge" id="role-badge"></span>
         </div>
         <div class="header-actions">
-          <button class="small-button dashboard-ai-button hidden" id="dashboard-ask-gemini" type="button">✦ Ask Gemini</button>
+          <button class="small-button dashboard-ai-button" id="dashboard-ask-ai" type="button">✦ Personal AI</button>
+          <button class="small-button hidden" id="install-app-btn" type="button">Install app</button>
+          <span class="connection-status hidden" id="connection-status" role="status" aria-live="polite" aria-atomic="true"></span>
+          <span class="install-app-status hidden" id="install-app-status" role="status" aria-live="polite" aria-atomic="true"></span>
           <button class="icon-button" id="refresh-dashboard-btn" type="button" aria-label="Refresh dashboard">↻</button>
         </div>
         <div class="dashboard-book-cluster">
@@ -238,12 +238,50 @@
           <a class="dashboard-nav-link" href="#system-backup-panel" data-dashboard-target="system-backup-panel">System settings</a>
           <a class="dashboard-nav-link" href="#dashboard-stats" data-dashboard-target="dashboard-stats">Progress</a>
           <a class="dashboard-nav-link" href="#semester-card" data-dashboard-target="semester-card">Semester plan</a>
+          <a class="dashboard-nav-link" href="#study-groups-card" data-dashboard-target="study-groups-card">Study groups</a>
           <a class="dashboard-nav-link" href="#dashboard-grid" data-dashboard-target="dashboard-grid">Activity</a>
           <a class="dashboard-nav-link" href="#coach-card" data-dashboard-target="coach-card">Study coach</a>
           <a class="dashboard-nav-link" href="#courses-card" data-dashboard-target="courses-card">Courses</a>
           <a class="dashboard-nav-link" href="#account-security-menu" data-dashboard-target="account-security-menu">Account security</a>
         </nav>
         <div class="dashboard-content" id="dashboard-content">
+      <section class="dashboard-card personal-ai-section hidden" id="personal-ai-section" aria-label="Personal AI chat">
+        <header class="personal-ai-header">
+          <div>
+            <p class="eyebrow">YOUR PERSONAL ASSISTANT</p>
+            <h3>Chat with Logi AI</h3>
+          </div>
+          <button class="small-button" id="personal-ai-new-chat" type="button">＋ New chat</button>
+        </header>
+        <div class="personal-ai-layout">
+          <aside class="personal-ai-history-panel" aria-label="Your conversations">
+            <p class="personal-ai-history-title">Recent chats</p>
+            <div class="personal-ai-history" id="personal-ai-history"></div>
+            <p class="personal-ai-private-note">Your conversations are saved in this browser for your account. They are not linked to a course.</p>
+          </aside>
+          <section class="personal-ai-chat" aria-label="Personal AI conversation">
+            <div class="personal-ai-welcome" id="personal-ai-welcome">
+              <span class="personal-ai-mark" aria-hidden="true">✦</span>
+              <h4>What would you like to work on?</h4>
+              <p>Ask a question, explore an idea, get help writing, or plan your next steps. No course selection needed.</p>
+              <div class="personal-ai-suggestions" id="personal-ai-suggestions">
+                <button type="button" data-personal-ai-prompt="Explain a difficult topic in simple terms and give me an example.">Explain a topic</button>
+                <button type="button" data-personal-ai-prompt="Help me make a clear, realistic plan for what I need to get done today.">Plan my day</button>
+                <button type="button" data-personal-ai-prompt="Help me improve a piece of writing. First ask me to paste the text and tell you the audience.">Help with writing</button>
+              </div>
+            </div>
+            <div class="personal-ai-messages hidden" id="personal-ai-messages" aria-live="polite"></div>
+            <form class="personal-ai-composer" id="personal-ai-form">
+              <label class="sr-only" for="personal-ai-input">Message your personal AI assistant</label>
+              <textarea id="personal-ai-input" maxlength="1200" rows="2" placeholder="Message Logi AI…" required></textarea>
+              <div class="personal-ai-composer-footer">
+                <span id="personal-ai-status" role="status" aria-live="polite">AI can make mistakes. Check important information.</span>
+                <button class="notebook-send personal-ai-send" id="personal-ai-send" type="submit" aria-label="Send message">↑</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
       <section class="admin-monitor hidden" id="admin-monitor-section" aria-label="System monitoring overview">
         <div class="stats-grid admin-stats-grid" id="admin-stats" aria-label="System statistics"></div>
         <div class="admin-charts-grid">
@@ -407,6 +445,59 @@
         <div class="semester-exam-list hidden" id="semester-exam-list"></div>
       </section>
 
+      <section class="dashboard-card study-groups-card" id="study-groups-card" aria-labelledby="study-groups-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">LEARN TOGETHER</p>
+            <h3 id="study-groups-heading">Study groups</h3>
+            <p class="study-groups-intro">Chat, share study files, and work toward goals together. Personal notes and progress stay private.</p>
+          </div>
+          <div class="study-group-actions">
+            <button class="small-button" id="show-create-group-btn" type="button">New group</button>
+            <button class="small-button small-button-muted" id="show-find-groups-btn" type="button">Find groups</button>
+            <button class="small-button small-button-muted" id="show-join-group-btn" type="button">Join with code</button>
+          </div>
+        </div>
+        <form class="study-group-form hidden" id="create-group-form">
+          <div class="field">
+            <label for="new-group-name">Group name</label>
+            <input id="new-group-name" maxlength="120" placeholder="e.g. Biology study circle" required />
+          </div>
+          <div class="field">
+            <label for="new-group-description">Description</label>
+            <input id="new-group-description" maxlength="500" placeholder="What are you studying together?" />
+          </div>
+          <label class="study-group-visibility">
+            <input id="new-group-discoverable" type="checkbox" checked />
+            <span>Let classmates find and join this group. Turn off for invite-code-only access.</span>
+          </label>
+          <div class="study-group-form-actions">
+            <button class="small-button" type="submit">Create group</button>
+            <p id="create-group-status" class="study-group-status" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+        <form class="study-group-form hidden" id="join-group-form">
+          <div class="field">
+            <label for="group-join-code">8-character invite code</label>
+            <input id="group-join-code" maxlength="8" pattern="[A-Fa-f0-9]{8}" autocomplete="off" required />
+          </div>
+          <div class="study-group-form-actions">
+            <button class="small-button" type="submit">Join group</button>
+            <p id="join-group-status" class="study-group-status" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+        <div class="study-group-discovery hidden" id="study-group-discovery">
+          <form class="study-group-search" id="study-group-search-form">
+            <label class="sr-only" for="study-group-search">Search public groups</label>
+            <input id="study-group-search" type="search" maxlength="80" placeholder="Search groups by name or subject" />
+            <button class="small-button" type="submit">Search</button>
+          </form>
+          <div id="study-group-search-results" class="study-group-search-results" aria-live="polite"></div>
+        </div>
+        <p class="study-group-status" id="study-groups-status" role="status" aria-live="polite">Loading your groups…</p>
+        <div id="study-groups-list" class="study-groups-list"></div>
+      </section>
+
       <div class="dashboard-grid" id="dashboard-grid">
         <section class="dashboard-card chart-card">
           <div class="section-heading">
@@ -437,7 +528,7 @@
             <h3 id="coach-headline">Your personalized study plan</h3>
             <button class="small-button hidden" id="retry-coach-btn" type="button">Retry insights</button>
           </div>
-          <p class="coach-ai-hint">Gemini reads your selectable slide text to generate study insights and source citations. Use <strong>Ask Gemini</strong> for follow-up questions, explanations, and quizzes.</p>
+          <p class="coach-ai-hint">Groq reads your selectable slide text to generate study insights and source citations. Use <strong>Ask Groq AI</strong> for follow-up questions, explanations, and quizzes.</p>
           <p class="coach-disclaimer" id="coach-status" role="status" aria-live="polite">Reading your slide content to build grounded suggestions. Your notes stay private.</p>
           <ul id="study-suggestions" class="study-suggestions"></ul>
         </div>
@@ -484,7 +575,7 @@
               <div>
                 <p class="eyebrow">ACCOUNT SECURITY</p>
                 <h3 id="recovery-codes-title">Password recovery codes</h3>
-                <p class="field-help">Password resets require both an emailed code and one unused recovery code. Save these somewhere private, separate from your email.</p>
+                <p class="field-help">Recovery codes are optional backup codes for your account. You do not need one to reset your password; a verified code sent to your email is enough.</p>
               </div>
             </div>
             <form id="recovery-codes-form" class="recovery-codes-form">
@@ -530,11 +621,11 @@
       <header class="upload-header">
         <div>
           <p class="eyebrow">COURSE MATERIALS</p>
-          <h2 id="upload-title">Upload slides</h2>
+          <h2 id="upload-title">Add study material</h2>
         </div>
         <button class="icon-button" data-close-modal type="button" aria-label="Close upload dialog">×</button>
       </header>
-      <p class="upload-subtitle">Add a PDF or PowerPoint file to your course library.</p>
+      <p class="upload-subtitle">Upload course materials, record a lecture, or import a public YouTube video. Audio and video transcripts become source files for your notebook and study sets.</p>
       <div class="upload-court" id="upload-court" aria-live="polite">
         <div class="upload-projectile" id="upload-projectile" aria-hidden="true">
           <span class="projectile-fold"></span>
@@ -552,11 +643,28 @@
           <span class="dropzone-prompt" id="dropzone-prompt">
             <span class="prompt-icon" aria-hidden="true">↑</span>
             <span>Choose a file or drop it here</span>
-            <span class="upload-hint">PDF, PPT, or PPTX · up to 25 MB</span>
+            <span class="upload-hint">PDF, PPT, PPTX, DOCX, TXT, or audio · up to 25 MB</span>
           </span>
         </button>
-        <input type="file" id="slide-file-input" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" hidden />
+        <input type="file" id="slide-file-input" accept=".pdf,.ppt,.pptx,.docx,.txt,.mp3,.wav,.m4a,.ogg,.webm,.aac,.flac,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,audio/*" hidden />
       </div>
+      <div class="media-intake-tools">
+        <button class="small-button" id="record-lecture-btn" type="button">Record a lecture</button>
+        <button class="small-button small-button-muted" id="show-youtube-import-btn" type="button">Import YouTube</button>
+        <p class="study-group-status" id="media-intake-status" role="status" aria-live="polite"></p>
+        <form class="youtube-import-form hidden" id="youtube-import-form">
+          <label for="youtube-video-url">Public YouTube video URL</label>
+          <input id="youtube-video-url" type="url" inputmode="url" maxlength="2048" placeholder="https://www.youtube.com/watch?v=…" required />
+          <label for="youtube-video-title">Title (optional)</label>
+          <input id="youtube-video-title" maxlength="160" placeholder="Lecture title" />
+          <label class="study-group-visibility">
+            <input id="youtube-video-permission" type="checkbox" required />
+            <span>I own this video or have permission to use its transcript.</span>
+          </label>
+          <button class="small-button" id="youtube-import-submit" type="submit">Import transcript</button>
+        </form>
+      </div>
+      <p class="field-help">Audio is sent to Groq for transcription. YouTube import uses captions when available; upload audio for videos without captions. Only import videos you have permission to use, and review generated transcripts for mistakes.</p>
       <div class="upload-success hidden" id="upload-success" role="status" aria-live="polite">
         <span class="upload-success-check" aria-hidden="true">✓</span>
         <span class="upload-success-copy">
@@ -586,6 +694,7 @@
           </div>
           <div class="reader-page" id="reader-page">
             <canvas id="slide-canvas" aria-label="Rendered slide page"></canvas>
+            <article class="reader-text-content hidden" id="reader-text-content"></article>
             <p class="reader-notice" id="reader-notice" role="status"></p>
             <a class="small-button reader-download" id="reader-download" href="">Download original file</a>
           </div>
@@ -645,7 +754,7 @@
             <button class="text-button notebook-select-all" id="notebook-select-all" type="button">Select all</button>
           </div>
           <ul id="notebook-source-list" class="notebook-source-list"></ul>
-          <p class="notebook-privacy-note">Selected slide text is sent to Google Gemini to answer your questions. Your source files stay in this app.</p>
+          <p class="notebook-privacy-note">Selected slide text is sent to Groq. Voice dictation uses your browser’s speech service; review the transcript before sending it.</p>
         </aside>
         <section class="notebook-chat" aria-label="Chat with course sources">
           <div class="notebook-chat-heading">
@@ -656,15 +765,40 @@
             </div>
           </div>
           <div class="notebook-prompts" id="notebook-prompts">
-            <button type="button" data-prompt="Summarize the key ideas in the selected sources.">Summarize key ideas</button>
+            <button class="notebook-study-set-button" id="build-study-set-btn" type="button">Build study set</button>
+            <button type="button" data-mode="recap" data-prompt="Recap the most important ideas in the selected sources and explain how they connect.">Summarize key ideas</button>
             <button type="button" data-prompt="Create a short study guide from the selected sources, with key terms and questions.">Make a study guide</button>
-            <button type="button" data-prompt="Quiz me on the most important concepts in the selected sources. Ask one question at a time.">Quiz me</button>
+            <button type="button" data-mode="quiz" data-prompt="Start a quiz on the most important concepts in the selected sources.">Quiz me</button>
+          </div>
+          <div class="study-set-panel hidden" id="study-set-panel">
+            <div class="study-set-toolbar">
+              <p id="study-set-summary" role="status" aria-live="polite"></p>
+              <button class="small-button small-button-muted" id="study-set-back-btn" type="button">Back to notebook</button>
+            </div>
+            <div class="study-set-tabs" role="tablist" aria-label="Study set activities">
+              <button class="study-set-tab is-active" id="study-tab-notes" type="button" role="tab" aria-selected="true" aria-controls="study-set-content" data-study-tab="notes">Key notes</button>
+              <button class="study-set-tab" id="study-tab-cards" type="button" role="tab" aria-selected="false" aria-controls="study-set-content" data-study-tab="cards">Flashcards</button>
+              <button class="study-set-tab" id="study-tab-quiz" type="button" role="tab" aria-selected="false" aria-controls="study-set-content" data-study-tab="quiz">Quiz</button>
+            </div>
+            <div id="study-set-content" class="study-set-content" role="tabpanel" aria-labelledby="study-tab-notes"></div>
+            <div id="study-set-citations" class="study-set-citations"></div>
           </div>
           <div class="notebook-messages" id="notebook-messages" aria-live="polite"></div>
           <form class="notebook-composer" id="notebook-form">
-            <label class="sr-only" for="notebook-question">Ask a question about your selected sources</label>
-            <textarea id="notebook-question" maxlength="2000" rows="2" placeholder="Ask a question about your sources…" required></textarea>
-            <button class="notebook-send" id="notebook-send-btn" type="submit" aria-label="Send question">↑</button>
+            <div class="notebook-mode-row">
+              <label for="notebook-study-mode">Study mode</label>
+              <select id="notebook-study-mode" aria-label="Study mode">
+                <option value="explain">Explain</option>
+                <option value="quiz">Quiz me</option>
+                <option value="recap">Quick recap</option>
+              </select>
+              <button class="notebook-voice" id="notebook-voice-btn" type="button" aria-pressed="false">Speak your question</button>
+            </div>
+            <div class="notebook-composer-input">
+              <label class="sr-only" for="notebook-question">Ask a question about your selected sources</label>
+              <textarea id="notebook-question" maxlength="2000" rows="2" placeholder="Ask a question about your sources…" required></textarea>
+              <button class="notebook-send" id="notebook-send-btn" type="submit" aria-label="Send question">↑</button>
+            </div>
           </form>
           <p class="notebook-footnote">AI can make mistakes. Check each answer against its source citations.</p>
         </section>
@@ -682,6 +816,6 @@
     <span class="sr-only">Working…</span>
   </div>
 
-  <script src="./app.js?v=dashboard-motion-5" defer></script>
+  <script src="./app.js?v=password-reset-email-only-2" defer></script>
 </body>
 </html>

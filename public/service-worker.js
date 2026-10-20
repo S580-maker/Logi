@@ -1,9 +1,9 @@
-const CACHE_NAME = 'logiauth-shell-v20';
+const CACHE_NAME = 'logiauth-shell-v35';
 const SHELL_FILES = [
   '/',
-  '/style.css?v=mobile-auth-artwork-2',
+  '/style.css?v=password-reset-email-only-2',
   '/auth-security.css?v=1',
-  '/app.js?v=dashboard-motion-5',
+  '/app.js?v=password-reset-email-only-2',
   '/manifest.webmanifest',
   '/icons/logi.svg',
 ];

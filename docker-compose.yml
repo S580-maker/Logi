@@ -1,0 +1,54 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      REDIS_URL: redis://redis:6379
+      TRUST_PROXY: "true"
+    volumes:
+      - logi-storage:/app/storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - logi-internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - logi-internal
+
+  proxy:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    environment:
+      ORIGIN_VERIFY_TOKEN: "${ORIGIN_VERIFY_TOKEN:?Set ORIGIN_VERIFY_TOKEN before starting the proxy}"
+      FORWARDED_PROTO: "${FORWARDED_PROTO:-http}"
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./deploy/aws/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - app
+    networks:
+      - logi-internal
+
+volumes:
+  logi-storage:
+  redis-data:
+
+networks:
+  logi-internal:

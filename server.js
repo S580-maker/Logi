@@ -12,6 +12,10 @@ const { loadSystemConfig, getSystemConfig } = require('./utils/system-config');
 
 const app = express();
 
+if (process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
+
 let startupError;
 
 app.use((req, res, next) => {
@@ -33,6 +37,7 @@ async function configureApp() {
 
   const authRoutes = require('./routes/auth');
   const backupRoutes = require('./routes/backup');
+  const groupRoutes = require('./routes/groups');
   const studyRoutes = require('./routes/study');
 
   app.use(helmet());
@@ -70,7 +75,12 @@ async function configureApp() {
 
   app.use('/api/auth', authRoutes);
   app.use('/api/study', studyRoutes);
+  app.use('/api/study/groups', groupRoutes);
   app.use('/api', backupRoutes);
+
+  app.use('/api', (req, res) => {
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
 
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public/index.html'));

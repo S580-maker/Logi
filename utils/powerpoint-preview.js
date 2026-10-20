@@ -2,6 +2,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
+const { pathToFileURL } = require('node:url');
 const { promisify } = require('util');
 
 const execFileAsync = promisify(execFile);
@@ -34,24 +35,52 @@ async function convertPowerPoint(storageName) {
   const inputPath = path.join(storageDir, 'slides', path.basename(storageName));
   const conversion = (async () => {
     const temporaryPath = path.join(previewDir, `${path.basename(outputPath, '.pdf')}-${process.pid}-${Date.now()}.pdf`);
+    const temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'logi-powerpoint-'));
     try {
-      await execFileAsync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-STA',
-          '-File',
-          converterScript,
-          '-InputPath',
-          inputPath,
-          '-OutputPath',
-          temporaryPath,
-        ],
-        { timeout: 120000, maxBuffer: 1024 * 1024, windowsHide: true }
-      );
+      if (process.platform === 'win32') {
+        await execFileAsync(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-STA',
+            '-File',
+            converterScript,
+            '-InputPath',
+            inputPath,
+            '-OutputPath',
+            temporaryPath,
+          ],
+          { timeout: 120000, maxBuffer: 1024 * 1024, windowsHide: true }
+        );
+      } else if (process.platform === 'linux') {
+        await execFileAsync(
+          'libreoffice',
+          [
+            `-env:UserInstallation=${pathToFileURL(temporaryDirectory).href}`,
+            '--headless',
+            '--convert-to',
+            'pdf',
+            '--outdir',
+            temporaryDirectory,
+            inputPath,
+          ],
+          { timeout: 120000, maxBuffer: 1024 * 1024 }
+        );
+        const convertedPath = path.join(
+          temporaryDirectory,
+          `${path.basename(inputPath, path.extname(inputPath))}.pdf`
+        );
+        const convertedFile = await fs.promises.stat(convertedPath);
+        if (!convertedFile.isFile() || convertedFile.size === 0) {
+          throw new Error('LibreOffice did not produce a PDF preview.');
+        }
+        await fs.promises.copyFile(convertedPath, temporaryPath);
+      } else {
+        throw new Error(`PowerPoint previews are not supported on ${process.platform}.`);
+      }
       await fs.promises.rename(temporaryPath, outputPath);
       return outputPath;
     } catch (error) {
@@ -62,7 +91,9 @@ async function convertPowerPoint(storageName) {
       });
       const detail = error.stderr?.trim() || error.message;
       console.error('Could not convert PowerPoint for preview:', detail);
-      throw new Error('Could not render this PowerPoint. Check that Microsoft PowerPoint is installed and try again.');
+      throw new Error('Could not render this PowerPoint. Check that PowerPoint or LibreOffice is installed and try again.');
+    } finally {
+      await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
     }
   })();
 

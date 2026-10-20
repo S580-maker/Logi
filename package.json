@@ -7,13 +7,13 @@
     "dev": "node --watch server.js",
     "db:init": "node db/init.js",
     "user:create": "node scripts/create-user.js",
+    "start:mobile": "npm --prefix mobile run start:mobile",
     "test": "node --test"
   },
   "engines": {
     "node": ">=22.13.0"
   },
   "dependencies": {
-    "@google/genai": "^2.27.0",
     "@simplewebauthn/server": "^14.0.3",
     "@supabase/supabase-js": "^2.39.0",
     "bcrypt": "^6.0.0",

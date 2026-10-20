@@ -4,6 +4,11 @@ const networkErrorMessage = location.protocol === 'file:'
   : 'We couldn’t connect to LogiAuth. Check your internet connection and try again. If it keeps happening, refresh the page.';
 let messageTimer;
 let currentUser;
+let personalAiConversations = [];
+let activePersonalAiConversationId;
+let personalAiStorageUserId;
+let personalAiSending = false;
+let personalAiStorageError = false;
 const accountRoles = [
   'admin',
   'manager',
@@ -23,22 +28,39 @@ let activeUploadCourse;
 let currentReadingSlide;
 let currentNotebook;
 let notebookHistory = [];
+let notebookRecognition;
+let currentStudySet;
+let studyCardIndex = 0;
+let studyCardRevealed = false;
+let studyCardsReviewed = 0;
+let studyCardsAgain = 0;
+let studyQuizAnswers = [];
+let studyQuizSubmitted = false;
 let pdfModulePromise;
 let currentPdfDocument;
 let currentPdfLoadingTask;
 let currentPdfRenderTask;
+let currentTextPages;
 let currentCoachSuggestion;
 let activityHeartbeat;
 let adminUsers = [];
+let studyGroups = [];
+let activeStudyGroupId;
+let studyGroupCourseOptions = [];
+let studyGroupChatTimer;
 let activeSmallLoadCount = 0;
 let activeBookLoadCount = 0;
 let smallLoadingTimer;
+let deferredInstallPrompt;
 const nativeFetch = window.fetch.bind(window);
 const themeToggle = $('theme-toggle');
 const themeToggleIcon = $('theme-toggle-icon');
 const authThemeToggle = $('auth-theme-toggle');
 const authThemeToggleIcon = authThemeToggle.querySelector('.auth-theme-toggle-icon');
 const THEME_STORAGE_KEY = 'logiauth-theme';
+const PERSONAL_AI_STORAGE_PREFIX = 'logiauth-personal-ai:';
+const PERSONAL_AI_MAX_CONVERSATIONS = 12;
+const PERSONAL_AI_MAX_MESSAGES = 30;
 let authThemeAnimationTimer;
 
 function decodeBase64Url(value) {
@@ -390,6 +412,12 @@ const showMessage = (text, type = 'info') => {
   }, 8000);
 };
 
+const showResetPasswordError = (text) => {
+  const error = $('reset-password-error');
+  error.textContent = text;
+  error.classList.toggle('hidden', !text);
+};
+
 const hideAll = () => {
   $('auth-mode-switch').classList.add('hidden');
   $('login-section').classList.add('hidden');
@@ -406,7 +434,7 @@ const showLogin = () => {
   passwordResetCode = '';
   $('reset-new-password').value = '';
   $('reset-confirm-password').value = '';
-  $('reset-recovery-code').value = '';
+  showResetPasswordError('');
   $('recovery-codes-form').reset();
   $('recovery-codes-list').replaceChildren();
   $('recovery-codes-output').classList.add('hidden');
@@ -450,7 +478,7 @@ const show2FA = (maskedEmail, purpose = 'login') => {
   passwordResetCode = '';
   $('reset-new-password').value = '';
   $('reset-confirm-password').value = '';
-  $('reset-recovery-code').value = '';
+  showResetPasswordError('');
   verificationPurpose = purpose;
   hideAll();
   $('twofa-section').classList.remove('hidden');
@@ -469,7 +497,7 @@ const show2FA = (maskedEmail, purpose = 'login') => {
   $('otp-subtitle').textContent = purpose === 'registration'
     ? `Enter the 6-digit code sent to ${maskedEmail}. Check this address is correct; choose Back to account details to change it.`
     : purpose === 'password-reset'
-      ? 'Enter the 6-digit reset code sent to your email. You will also need an unused recovery code.'
+      ? 'Enter the 6-digit code from your reset email to continue.'
       : purpose === 'login-email'
         ? `For the first 7 days after setting up your passkey, enter the 6-digit sign-in code sent to ${maskedEmail}.`
         : `Enter the 6-digit code sent to ${maskedEmail}.`;
@@ -547,6 +575,10 @@ const showDashboard = (user) => {
     'hidden',
     !['manager', 'editor', 'instructor', 'content_manager', 'student'].includes(user.role)
   );
+  const canManageGroups = ['admin', 'manager', 'editor', 'instructor', 'content_manager', 'student'].includes(user.role);
+  ['show-create-group-btn', 'show-find-groups-btn', 'show-join-group-btn'].forEach((id) => {
+    $(id).classList.toggle('hidden', !canManageGroups);
+  });
   adminUsers = [];
   setDashboardTab(user.role === 'admin' ? 'admin-monitor-section'
     : user.role === 'manager' ? 'manager-monitor-section'
@@ -560,14 +592,18 @@ const showDashboard = (user) => {
 function renderDashboardNavigation(user) {
   const adminItems = [
     ['admin-monitor-section', 'Overview'],
+    ['personal-ai-section', 'Personal AI'],
     ['admin-users-panel', 'Accounts'],
     ['system-backup-panel', 'System settings'],
+    ['study-groups-card', 'Study groups'],
   ];
   const workspaceItems = [
     ...(user.role === 'manager' ? [['manager-monitor-section', 'Overview']] : []),
     ...(user.role === 'manager' ? [] : [['dashboard-stats', 'Overview']]),
     ...(user.role === 'manager' ? [['dashboard-stats', 'Progress']] : []),
+    ['personal-ai-section', 'Personal AI'],
     ['semester-card', 'Semester plan'],
+    ['study-groups-card', 'Study groups'],
     ['dashboard-grid', 'Activity'],
     ['coach-card', 'Study coach'],
     ['courses-card', 'Courses'],
@@ -683,6 +719,7 @@ $('dashboard-sidebar').addEventListener('click', (event) => {
   if (!target) return;
   event.preventDefault();
   setDashboardTab(target.id);
+  if (target.id === 'personal-ai-section') loadPersonalAiWorkspace();
 });
 
 const dashboardTiltTargets = '.stats-grid > .stat-card';
@@ -889,6 +926,7 @@ async function loadDashboard() {
       renderAdminOverview(data);
       await loadAdminUsers();
       await Promise.all([loadManagerOverview(), loadSystemStatus()]);
+      await loadStudyGroups();
       return;
     }
     if (currentUser.role === 'manager') {
@@ -951,12 +989,839 @@ function renderDashboard(data) {
   renderCourseChart(courses);
   renderCourses(courses);
   renderRecentUploads(recentSlides);
-  const notebookCourse = courses.find((course) => Number(course.slide_count) > 0);
-  const dashboardNotebookButton = $('dashboard-ask-gemini');
-  dashboardNotebookButton.classList.toggle('hidden', !notebookCourse);
-  dashboardNotebookButton.dataset.courseId = notebookCourse ? String(notebookCourse.id) : '';
+  const dashboardNotebookButton = $('dashboard-ask-ai');
+  dashboardNotebookButton.classList.remove('hidden');
   loadContentCoach();
   loadSemesterPlanner();
+  loadStudyGroups();
+}
+
+async function loadStudyGroups() {
+  const status = $('study-groups-status');
+  status.textContent = 'Loading your groups…';
+  try {
+    const response = await fetch('/api/study/groups', { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load study groups.');
+    studyGroups = data.groups;
+    if (activeStudyGroupId && !studyGroups.some((group) => Number(group.id) === activeStudyGroupId)) {
+      activeStudyGroupId = null;
+    }
+    renderStudyGroups();
+    status.textContent = studyGroups.length
+      ? `${studyGroups.length} ${studyGroups.length === 1 ? 'group' : 'groups'} · shared materials are visible to members; private notes stay yours.`
+      : 'No groups yet. Create one, find a public group, or join with an invite code.';
+  } catch (error) {
+    status.textContent = error.message || 'Could not load study groups.';
+  }
+}
+
+function renderStudyGroups() {
+  const root = $('study-groups-list');
+  if (!studyGroups.length) {
+    root.replaceChildren(element('p', 'empty-state', 'Create a study group or join classmates to start sharing selected courses.'));
+    return;
+  }
+  root.replaceChildren(...studyGroups.map((group) => {
+    const card = element('article', 'study-group-card');
+    card.dataset.groupId = String(group.id);
+    if (Number(group.id) === activeStudyGroupId) card.classList.add('is-open');
+    const heading = element('div', 'study-group-card-heading');
+    const copy = element('div', 'study-group-card-copy');
+    copy.append(
+      element('h4', '', group.name),
+      element('p', '', `${group.member_count} ${Number(group.member_count) === 1 ? 'member' : 'members'} · ${group.course_count} shared ${Number(group.course_count) === 1 ? 'course' : 'courses'} · ${group.discoverable ? 'Discoverable' : 'Invite only'}`)
+    );
+    const open = element('button', 'small-button small-button-muted', Number(group.id) === activeStudyGroupId ? 'Refresh group' : 'Open group');
+    open.type = 'button';
+    open.addEventListener('click', () => loadStudyGroupDetail(group.id));
+    heading.append(copy, open);
+    card.append(heading);
+    if (Number(group.id) === activeStudyGroupId) {
+      const detail = $('study-group-detail');
+      if (detail) card.append(detail);
+    }
+    return card;
+  }));
+}
+
+async function loadStudyGroupDetail(groupId) {
+  clearInterval(studyGroupChatTimer);
+  studyGroupChatTimer = null;
+  activeStudyGroupId = Number(groupId);
+  renderStudyGroups();
+  const card = [...$('study-groups-list').querySelectorAll('.study-group-card')]
+    .find((item) => Number(item.dataset.groupId) === activeStudyGroupId);
+  if (!card) return;
+  const detail = element('div', 'study-group-detail');
+  detail.id = 'study-group-detail';
+  detail.append(element('p', 'empty-state', 'Loading shared courses and group discussion…'));
+  const oldDetail = $('study-group-detail');
+  if (oldDetail) oldDetail.remove();
+  card.append(detail);
+
+  try {
+    const [groupResponse, coursesResponse] = await Promise.all([
+      fetch(`/api/study/groups/${activeStudyGroupId}`, { credentials: 'same-origin' }),
+      fetch('/api/study/groups/available-courses', { credentials: 'same-origin' }),
+    ]);
+    const data = await groupResponse.json();
+    const available = await coursesResponse.json();
+    if (!groupResponse.ok) throw new Error(data.error || 'Could not load this group.');
+    if (!coursesResponse.ok) throw new Error(available.error || 'Could not load courses available to share.');
+    if (Number(data.group.id) !== activeStudyGroupId) return;
+    studyGroupCourseOptions = available.courses;
+    renderStudyGroupDetail(detail, data);
+    studyGroupChatTimer = setInterval(() => {
+      refreshStudyGroupChat(activeStudyGroupId, detail);
+    }, 15000);
+  } catch (error) {
+    detail.replaceChildren(element('p', 'empty-state', error.message || networkErrorMessage));
+  }
+}
+
+function renderStudyGroupDetail(root, data) {
+  const { group, courses, suggestions, members, messages, materials, tasks } = data;
+  const header = element('header', 'study-group-header');
+  const groupAvatar = element('span', 'study-group-avatar', group.name.slice(0, 1).toUpperCase());
+  groupAvatar.setAttribute('aria-hidden', 'true');
+  const groupIdentity = element('div', 'study-group-identity');
+  groupIdentity.append(
+    element('strong', '', group.name),
+    element('span', '', `${group.member_count} ${Number(group.member_count) === 1 ? 'member' : 'members'} · ${group.discoverable ? 'Discoverable' : 'Invite only'}`)
+  );
+  const menuWrap = element('div', 'study-group-menu-wrap');
+  const menuToggle = element('button', 'study-group-menu-toggle', '⋮');
+  menuToggle.type = 'button';
+  menuToggle.setAttribute('aria-label', 'Group options');
+  menuToggle.setAttribute('aria-haspopup', 'menu');
+  menuToggle.setAttribute('aria-expanded', 'false');
+  const groupMenu = element('div', 'study-group-overflow-menu hidden');
+  groupMenu.setAttribute('role', 'menu');
+  const addMenuAction = (label, action) => {
+    const button = element('button', 'study-group-menu-item', label);
+    button.type = 'button';
+    button.setAttribute('role', 'menuitem');
+    button.addEventListener('click', async () => {
+      groupMenu.classList.add('hidden');
+      menuToggle.setAttribute('aria-expanded', 'false');
+      await action();
+    });
+    groupMenu.append(button);
+  };
+  addMenuAction('Invite members · copy code', async () => {
+    try {
+      await navigator.clipboard.writeText(group.join_code);
+      showMessage('Invite code copied.', 'success');
+    } catch {
+      showMessage(`Invite code: ${group.join_code}`, 'info');
+    }
+  });
+  addMenuAction('Group members', () => openGroupPanel(memberSection));
+  addMenuAction('Suggestions & discussion', () => openGroupPanel(discussion));
+  if (group.member_role === 'owner') {
+    addMenuAction('Delete group', async () => {
+      if (!window.confirm(`Delete “${group.name}” and its group discussion? Shared courses and private study data will not be deleted.`)) return;
+      try {
+        await runStudyGroupAction(`/api/study/groups/${group.id}`, { method: 'DELETE' }, 'Group deleted.');
+        activeStudyGroupId = null;
+        await loadStudyGroups();
+      } catch (error) {
+        showMessage(error.message || 'Could not delete this group.', 'error');
+      }
+    });
+  } else {
+    addMenuAction('Leave group', async () => {
+      if (!window.confirm(`Leave “${group.name}”? You will lose access to its shared courses.`)) return;
+      try {
+        await runStudyGroupAction(
+          `/api/study/groups/${group.id}/members/me`,
+          { method: 'DELETE' },
+          'You left the group.'
+        );
+        activeStudyGroupId = null;
+        await loadStudyGroups();
+      } catch (error) {
+        showMessage(error.message || 'Could not leave this group.', 'error');
+      }
+    });
+  }
+  menuToggle.addEventListener('click', () => {
+    const isOpen = !groupMenu.classList.contains('hidden');
+    groupMenu.classList.toggle('hidden', isOpen);
+    menuToggle.setAttribute('aria-expanded', String(!isOpen));
+  });
+  menuWrap.append(menuToggle, groupMenu);
+  header.append(groupAvatar, groupIdentity, menuWrap);
+
+  const courseSection = element('section', 'study-group-section');
+  courseSection.append(element('h5', '', 'Shared courses'));
+  const courseList = element('div', 'study-group-course-list');
+  if (!courses.length) {
+    courseList.append(element('p', 'empty-state', 'No courses are shared yet. Course owners can add a course here.'));
+  } else {
+    courses.forEach((course) => {
+      const item = element('article', 'study-group-course');
+      const copy = element('div', 'study-group-course-copy');
+      copy.append(
+        element('strong', '', course.title),
+        element('span', '', `${course.slide_count} study files · shared by ${course.course_owner || 'course owner'}`)
+      );
+      const controls = element('div', 'study-group-course-actions');
+      const notebook = element('button', 'small-button', 'Study course');
+      notebook.type = 'button';
+      notebook.addEventListener('click', () => openCourseNotebook(course.id));
+      controls.append(notebook);
+      const files = element('button', 'small-button small-button-muted', 'View materials');
+      files.type = 'button';
+      files.addEventListener('click', () => toggleStudyGroupCourseFiles(course, item, files));
+      controls.append(files);
+      if (group.member_role === 'owner') {
+        const remove = element('button', 'small-button study-group-danger', 'Unshare');
+        remove.type = 'button';
+        remove.addEventListener('click', async () => {
+          try {
+            await runStudyGroupAction(
+              `/api/study/groups/${group.id}/courses/${course.id}`,
+              { method: 'DELETE' },
+              'Course removed from this group.'
+            );
+            await loadStudyGroupDetail(group.id);
+            await loadStudyGroups();
+          } catch (error) {
+            showMessage(error.message || 'Could not unshare this course.', 'error');
+          }
+        });
+        controls.append(remove);
+      }
+      const materials = element('ul', 'study-group-course-materials hidden');
+      item.append(copy, controls, materials);
+      courseList.append(item);
+    });
+  }
+  courseSection.append(courseList);
+
+  const chat = element('section', 'study-group-section study-group-chat');
+  chat.dataset.groupId = String(group.id);
+  const messageList = element('div', 'study-group-chat-messages');
+  messageList.setAttribute('role', 'log');
+  messageList.setAttribute('aria-label', 'Group messages');
+  messageList.setAttribute('aria-live', 'polite');
+  messageList.dataset.groupId = String(group.id);
+  renderStudyGroupMessages(messageList, messages);
+  const messageForm = element('form', 'study-group-chat-form');
+  const plusWrap = element('div', 'study-group-plus-wrap');
+  const plusToggle = element('button', 'study-group-plus-toggle', '+');
+  plusToggle.type = 'button';
+  plusToggle.setAttribute('aria-label', 'Add to group chat');
+  plusToggle.setAttribute('aria-haspopup', 'menu');
+  plusToggle.setAttribute('aria-expanded', 'false');
+  const plusMenu = element('div', 'study-group-plus-menu hidden');
+  plusMenu.setAttribute('role', 'menu');
+  const messageInput = element('textarea');
+  messageInput.maxLength = 2000;
+  messageInput.rows = 2;
+  messageInput.placeholder = 'Message your study group…';
+  messageInput.setAttribute('aria-label', 'Group chat message');
+  messageInput.required = true;
+  const sendMessage = element('button', 'study-group-send-button', '➤');
+  sendMessage.type = 'submit';
+  sendMessage.setAttribute('aria-label', 'Send message');
+  plusToggle.addEventListener('click', () => {
+    const isOpen = !plusMenu.classList.contains('hidden');
+    plusMenu.classList.toggle('hidden', isOpen);
+    plusToggle.setAttribute('aria-expanded', String(!isOpen));
+  });
+  plusWrap.append(plusToggle, plusMenu);
+  messageForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    sendMessage.disabled = true;
+    try {
+      await runStudyGroupAction(
+        `/api/study/groups/${group.id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ body: messageInput.value }),
+        },
+        'Message sent.'
+      );
+      messageInput.value = '';
+      await refreshStudyGroupChat(group.id, chat);
+    } catch (error) {
+      showMessage(error.message || 'Could not send your message.', 'error');
+    } finally {
+      sendMessage.disabled = false;
+    }
+  });
+  messageForm.append(plusWrap, messageInput, sendMessage);
+  chat.append(messageList, messageForm);
+
+  const materialsSection = element('section', 'study-group-section');
+  materialsSection.append(
+    element('h5', '', 'Group slides and files'),
+    element('p', 'study-group-help', 'Files uploaded here are available to every group member.')
+  );
+  const materialList = element('div', 'study-group-material-list');
+  renderStudyGroupMaterials(materialList, materials, group.id);
+  const materialForm = element('form', 'study-group-material-form');
+  const materialInput = element('input');
+  materialInput.type = 'file';
+  materialInput.accept = '.pdf,.ppt,.pptx,.docx,.txt';
+  materialInput.setAttribute('aria-label', 'Choose a group slide or study file');
+  materialInput.required = true;
+  const uploadMaterial = element('button', 'small-button', 'Upload to group');
+  uploadMaterial.type = 'submit';
+  const materialStatus = element('span', 'study-group-status');
+  materialStatus.setAttribute('role', 'status');
+  materialForm.append(materialInput, uploadMaterial, materialStatus);
+  materialForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const file = materialInput.files[0];
+    if (!file) return;
+    uploadMaterial.disabled = true;
+    materialStatus.textContent = 'Uploading group file…';
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      await runStudyGroupAction(
+        `/api/study/groups/${group.id}/materials`,
+        { method: 'POST', body: formData },
+        'File shared with the group.'
+      );
+      await loadStudyGroupDetail(group.id);
+    } catch (error) {
+      materialStatus.textContent = error.message || 'Could not upload this group file.';
+    } finally {
+      uploadMaterial.disabled = false;
+    }
+  });
+  materialsSection.append(materialForm, materialList);
+
+  const taskSection = element('section', 'study-group-section');
+  taskSection.append(
+    element('h5', '', 'Group goals and tasks'),
+    element('p', 'study-group-help', group.member_role === 'owner'
+      ? 'As group leader, set goals, create tasks, and assign work to members.'
+      : 'The group leader sets goals and tasks. Update the status of tasks assigned to you.')
+  );
+  const taskList = element('div', 'study-group-task-list');
+  renderStudyGroupTasks(taskList, tasks, group, members);
+  if (group.member_role === 'owner') {
+    const taskForm = element('form', 'study-group-task-form');
+    const taskType = element('select');
+    taskType.setAttribute('aria-label', 'Goal or task');
+    taskType.append(new Option('Task', 'task'), new Option('Group goal', 'goal'));
+    const taskTitle = element('input');
+    taskTitle.maxLength = 120;
+    taskTitle.placeholder = 'Goal or task title';
+    taskTitle.setAttribute('aria-label', 'Goal or task title');
+    taskTitle.required = true;
+    const taskDescription = element('textarea');
+    taskDescription.maxLength = 1000;
+    taskDescription.rows = 2;
+    taskDescription.placeholder = 'Details (optional)';
+    taskDescription.setAttribute('aria-label', 'Goal or task details');
+    const dueDate = element('input');
+    dueDate.type = 'date';
+    dueDate.setAttribute('aria-label', 'Due date (optional)');
+    const assignee = element('select');
+    assignee.setAttribute('aria-label', 'Assign to a member (optional)');
+    assignee.append(new Option('Anyone in group', ''));
+    members.forEach((member) => {
+      assignee.append(new Option(member.username, String(member.user_id)));
+    });
+    const createTask = element('button', 'small-button', 'Add goal or task');
+    createTask.type = 'submit';
+    taskForm.append(taskType, taskTitle, taskDescription, dueDate, assignee, createTask);
+    taskForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      createTask.disabled = true;
+      try {
+        await runStudyGroupAction(
+          `/api/study/groups/${group.id}/tasks`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              taskType: taskType.value,
+              title: taskTitle.value,
+              description: taskDescription.value,
+              dueDate: dueDate.value || null,
+              assignedTo: assignee.value || null,
+            }),
+          },
+          'Goal or task added.'
+        );
+        await loadStudyGroupDetail(group.id);
+      } catch (error) {
+        showMessage(error.message || 'Could not add this goal or task.', 'error');
+      } finally {
+        createTask.disabled = false;
+      }
+    });
+    taskSection.append(taskForm);
+  }
+  taskSection.append(taskList);
+
+  const canShareCourses = studyGroupCourseOptions.length > 0;
+  if (canShareCourses) {
+    const shareForm = element('form', 'study-group-share-form');
+    const select = element('select');
+    select.setAttribute('aria-label', 'Choose a course to share');
+    select.required = true;
+    select.append(new Option('Choose one of your courses…', ''));
+    studyGroupCourseOptions.forEach((course) => {
+      select.append(new Option(course.title, String(course.id)));
+    });
+    const share = element('button', 'small-button', 'Share course');
+    share.type = 'submit';
+    const shareStatus = element('span', 'study-group-status');
+    shareStatus.setAttribute('role', 'status');
+    shareForm.append(select, share, shareStatus);
+    shareForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      share.disabled = true;
+      try {
+        await runStudyGroupAction(
+          `/api/study/groups/${group.id}/courses`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ courseId: Number(select.value) }),
+          },
+          'Course shared with the group.'
+        );
+        await loadStudyGroupDetail(group.id);
+        await loadStudyGroups();
+      } catch (error) {
+        shareStatus.textContent = error.message || 'Could not share this course.';
+      } finally {
+        share.disabled = false;
+      }
+    });
+    courseSection.append(shareForm);
+  }
+
+  const memberSection = element('details', 'study-group-section study-group-members');
+  const memberSummary = element('summary', '', `${members.length} group ${members.length === 1 ? 'member' : 'members'}`);
+  const memberList = element('ul', 'study-group-member-list');
+  members.forEach((member) => {
+    const item = element('li', '');
+    item.append(
+      element('strong', '', member.username),
+      element('span', '', member.role === 'owner' ? 'Group owner' : 'Member')
+    );
+    memberList.append(item);
+  });
+  memberSection.append(memberSummary, memberList);
+
+  const discussion = element('section', 'study-group-section study-group-discussion');
+  discussion.append(
+    element('h5', '', 'Suggestions & discussion'),
+    element('p', 'study-group-help', 'Share an idea or question. Every group member can read and reply.')
+  );
+  const suggestionForm = element('form', 'study-group-suggestion-form');
+  const suggestionTitle = element('input');
+  suggestionTitle.maxLength = 120;
+  suggestionTitle.placeholder = 'Suggestion title';
+  suggestionTitle.setAttribute('aria-label', 'Suggestion title');
+  suggestionTitle.required = true;
+  const suggestionBody = element('textarea');
+  suggestionBody.maxLength = 2000;
+  suggestionBody.rows = 2;
+  suggestionBody.placeholder = 'What would help your group study together?';
+  suggestionBody.setAttribute('aria-label', 'Suggestion details');
+  suggestionBody.required = true;
+  const postSuggestion = element('button', 'small-button', 'Post suggestion');
+  postSuggestion.type = 'submit';
+  suggestionForm.append(suggestionTitle, suggestionBody, postSuggestion);
+  suggestionForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    postSuggestion.disabled = true;
+    try {
+      await runStudyGroupAction(
+        `/api/study/groups/${group.id}/suggestions`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: suggestionTitle.value, body: suggestionBody.value }),
+        },
+        'Suggestion posted.'
+      );
+      await loadStudyGroupDetail(group.id);
+    } catch (error) {
+      showMessage(error.message || 'Could not post your suggestion.', 'error');
+    } finally {
+      postSuggestion.disabled = false;
+    }
+  });
+  const suggestionList = element('div', 'study-group-suggestion-list');
+  if (!suggestions.length) {
+    suggestionList.append(element('p', 'empty-state', 'No suggestions yet. Start a discussion for your group.'));
+  }
+  suggestions.forEach((suggestion) => {
+    const post = element('article', 'study-group-suggestion');
+    const header = element('div', 'study-group-suggestion-header');
+    header.append(
+      element('strong', '', suggestion.title),
+      element('span', '', `${suggestion.username || 'Former member'} · ${formatDate(suggestion.created_at)}`)
+    );
+    post.append(header, element('p', 'study-group-suggestion-body', suggestion.body));
+    if (suggestion.can_delete) {
+      const remove = element('button', 'text-button study-group-remove-post', 'Remove');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        try {
+          await runStudyGroupAction(
+            `/api/study/groups/${group.id}/suggestions/${suggestion.id}`,
+            { method: 'DELETE' },
+            'Suggestion removed.'
+          );
+          await loadStudyGroupDetail(group.id);
+        } catch (error) {
+          showMessage(error.message || 'Could not remove this suggestion.', 'error');
+        }
+      });
+      post.append(remove);
+    }
+    const comments = element('div', 'study-group-comments');
+    suggestion.comments.forEach((comment) => {
+      const commentRow = element('div', 'study-group-comment');
+      commentRow.append(
+        element('strong', '', comment.username || 'Former member'),
+        element('p', '', comment.body)
+      );
+      if (comment.can_delete) {
+        const removeComment = element('button', 'text-button', 'Remove');
+        removeComment.type = 'button';
+        removeComment.addEventListener('click', async () => {
+          try {
+            await runStudyGroupAction(
+              `/api/study/groups/${group.id}/suggestions/${suggestion.id}/comments/${comment.id}`,
+              { method: 'DELETE' },
+              'Comment removed.'
+            );
+            await loadStudyGroupDetail(group.id);
+          } catch (error) {
+            showMessage(error.message || 'Could not remove this comment.', 'error');
+          }
+        });
+        commentRow.append(removeComment);
+      }
+      comments.append(commentRow);
+    });
+    const commentForm = element('form', 'study-group-comment-form');
+    const commentInput = element('input');
+    commentInput.maxLength = 1000;
+    commentInput.placeholder = 'Reply to this suggestion…';
+    commentInput.setAttribute('aria-label', `Comment on ${suggestion.title}`);
+    commentInput.required = true;
+    const reply = element('button', 'small-button small-button-muted', 'Reply');
+    reply.type = 'submit';
+    commentForm.append(commentInput, reply);
+    commentForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      reply.disabled = true;
+      try {
+        await runStudyGroupAction(
+          `/api/study/groups/${group.id}/suggestions/${suggestion.id}/comments`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ body: commentInput.value }),
+          },
+          'Reply added.'
+        );
+        await loadStudyGroupDetail(group.id);
+      } catch (error) {
+        showMessage(error.message || 'Could not post your reply.', 'error');
+      } finally {
+        reply.disabled = false;
+      }
+    });
+    comments.append(commentForm);
+    post.append(comments);
+    suggestionList.append(post);
+  });
+  discussion.append(suggestionForm, suggestionList);
+  const panels = [
+    ['files', materialsSection, 'Upload slides or files'],
+    ['tasks', taskSection, 'Goals and tasks'],
+    ['courses', courseSection, 'Shared courses'],
+    ['members', memberSection, 'Group members'],
+    ['discussion', discussion, 'Suggestions and discussion'],
+  ];
+  panels.forEach(([key, panel, label]) => {
+    panel.classList.add('study-group-feature-panel', 'hidden');
+    const closePanel = element('button', 'study-group-panel-close', '‹ Back to chat');
+    closePanel.type = 'button';
+    closePanel.addEventListener('click', () => panel.classList.add('hidden'));
+    panel.prepend(closePanel);
+    const menuAction = element('button', 'study-group-menu-item', label);
+    menuAction.type = 'button';
+    menuAction.setAttribute('role', 'menuitem');
+    menuAction.dataset.panel = key;
+    menuAction.addEventListener('click', () => {
+      plusMenu.classList.add('hidden');
+      plusToggle.setAttribute('aria-expanded', 'false');
+      openGroupPanel(panel);
+    });
+    plusMenu.append(menuAction);
+  });
+  root.replaceChildren(header, chat, materialsSection, taskSection, courseSection, memberSection, discussion);
+}
+
+function openGroupPanel(panel) {
+  const detail = panel?.closest('.study-group-detail');
+  if (!detail) return;
+  detail.querySelectorAll('.study-group-feature-panel').forEach((item) => {
+    item.classList.toggle('hidden', item !== panel);
+  });
+  panel.scrollTop = 0;
+  panel.querySelector('input:not([type="file"]), textarea, select, button:not(.study-group-panel-close)')?.focus();
+}
+
+function renderStudyGroupMessages(root, messages) {
+  const shouldScrollToBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 40;
+  root.replaceChildren();
+  if (!messages.length) {
+    root.append(element('p', 'empty-state', 'No messages yet. Say hello to your group.'));
+    return;
+  }
+  messages.forEach((message) => {
+    const row = element('article', `study-group-chat-message${message.is_mine ? ' is-mine' : ''}`);
+    const header = element('div', 'study-group-chat-message-header');
+    header.append(
+      element('strong', '', message.username || 'Former member'),
+      element('time', '', formatDate(message.created_at))
+    );
+    row.append(header, element('p', '', message.body));
+    if (message.can_delete) {
+      const remove = element('button', 'text-button', 'Remove');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        try {
+          await runStudyGroupAction(
+            `/api/study/groups/${root.dataset.groupId}/messages/${message.id}`,
+            { method: 'DELETE' },
+            'Message removed.'
+          );
+          await refreshStudyGroupChat(Number(root.dataset.groupId), root.closest('.study-group-chat'));
+        } catch (error) {
+          showMessage(error.message || 'Could not remove this message.', 'error');
+        }
+      });
+      row.append(remove);
+    }
+    root.append(row);
+  });
+  if (shouldScrollToBottom) root.scrollTop = root.scrollHeight;
+}
+
+async function refreshStudyGroupChat(groupId, chat) {
+  if (!chat?.isConnected || Number(groupId) !== activeStudyGroupId) return;
+  const messageList = chat.querySelector('.study-group-chat-messages');
+  try {
+    const response = await fetch(`/api/study/groups/${groupId}/messages`, { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not refresh group chat.');
+    if (chat.isConnected && Number(groupId) === activeStudyGroupId) {
+      renderStudyGroupMessages(messageList, data.messages);
+    }
+  } catch (error) {
+    console.error('Could not refresh group chat:', error.message);
+  }
+}
+
+function renderStudyGroupMaterials(root, materials, groupId) {
+  root.replaceChildren();
+  if (!materials.length) {
+    root.append(element('p', 'empty-state', 'No files have been shared with this group yet.'));
+    return;
+  }
+  materials.forEach((material) => {
+    const row = element('article', 'study-group-material');
+    const download = element('a', 'study-group-material-link', material.original_name);
+    download.href = `/api/study/groups/${groupId}/materials/${material.id}/file`;
+    download.setAttribute('download', material.original_name);
+    row.append(
+      download,
+      element('span', 'file-meta-line', `${formatBytes(material.size_bytes)} · ${material.username || 'Former member'} · ${formatDate(material.created_at)}`)
+    );
+    if (material.can_delete) {
+      const remove = element('button', 'text-button study-group-remove-post', 'Remove');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        try {
+          await runStudyGroupAction(
+            `/api/study/groups/${groupId}/materials/${material.id}`,
+            { method: 'DELETE' },
+            'Group file removed.'
+          );
+          await loadStudyGroupDetail(groupId);
+        } catch (error) {
+          showMessage(error.message || 'Could not remove this group file.', 'error');
+        }
+      });
+      row.append(remove);
+    }
+    root.append(row);
+  });
+}
+
+function renderStudyGroupTasks(root, tasks, group, members) {
+  root.replaceChildren();
+  if (!tasks.length) {
+    root.append(element('p', 'empty-state', 'The group leader has not added any goals or tasks yet.'));
+    return;
+  }
+  tasks.forEach((task) => {
+    const item = element('article', `study-group-task${task.status === 'complete' ? ' is-complete' : ''}`);
+    const heading = element('div', 'study-group-task-heading');
+    heading.append(
+      element('span', 'study-group-task-type', task.task_type === 'goal' ? 'GROUP GOAL' : 'TASK'),
+      element('strong', '', task.title)
+    );
+    item.append(heading);
+    if (task.description) item.append(element('p', '', task.description));
+    item.append(element('span', 'file-meta-line', [
+      task.assigned_to_name ? `Assigned to ${task.assigned_to_name}` : 'Open to the group',
+      task.due_date ? `Due ${formatDate(task.due_date)}` : '',
+      task.created_by_name ? `Set by ${task.created_by_name}` : '',
+    ].filter(Boolean).join(' · ')));
+    if (task.can_update) {
+      const status = element('select');
+      status.setAttribute('aria-label', `Status for ${task.title}`);
+      [
+        ['planned', 'Not started'],
+        ['in_progress', 'In progress'],
+        ['complete', 'Complete'],
+      ].forEach(([value, label]) => status.append(new Option(label, value)));
+      status.value = task.status;
+      status.addEventListener('change', async () => {
+        status.disabled = true;
+        try {
+          await runStudyGroupAction(
+            `/api/study/groups/${group.id}/tasks/${task.id}`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: status.value }),
+            },
+            'Task status updated.'
+          );
+          await loadStudyGroupDetail(group.id);
+        } catch (error) {
+          showMessage(error.message || 'Could not update this task.', 'error');
+          status.disabled = false;
+        }
+      });
+      item.append(status);
+    }
+    if (group.member_role === 'owner') {
+      const remove = element('button', 'text-button study-group-remove-post', 'Remove');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        try {
+          await runStudyGroupAction(
+            `/api/study/groups/${group.id}/tasks/${task.id}`,
+            { method: 'DELETE' },
+            'Goal or task removed.'
+          );
+          await loadStudyGroupDetail(group.id);
+        } catch (error) {
+          showMessage(error.message || 'Could not remove this goal or task.', 'error');
+        }
+      });
+      item.append(remove);
+    }
+    root.append(item);
+  });
+}
+
+async function toggleStudyGroupCourseFiles(course, item, button) {
+  const materials = item.querySelector('.study-group-course-materials');
+  if (!materials.classList.contains('hidden')) {
+    materials.classList.add('hidden');
+    button.textContent = 'View materials';
+    return;
+  }
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/study/courses/${course.id}/slides`, { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load shared course materials.');
+    materials.replaceChildren(...data.slides.map((slide) => {
+      const row = element('li', '');
+      const open = element('button', 'file-link', slide.original_name);
+      open.type = 'button';
+      open.addEventListener('click', () => openSlideReader(course.id, slide));
+      row.append(open, element('span', 'file-meta-line', `${formatBytes(slide.size_bytes)} · ${formatDate(slide.created_at)}`));
+      return row;
+    }));
+    if (!data.slides.length) {
+      materials.append(element('li', 'empty-state', 'No study materials have been added yet.'));
+    }
+    materials.classList.remove('hidden');
+    button.textContent = 'Hide materials';
+  } catch (error) {
+    showMessage(error.message || 'Could not load shared course materials.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function runStudyGroupAction(url, options, successMessage) {
+  const response = await fetch(url, { credentials: 'same-origin', ...options });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'The group action could not be completed.');
+  showMessage(successMessage, 'success');
+  return data;
+}
+
+async function searchStudyGroups() {
+  const root = $('study-group-search-results');
+  root.replaceChildren(element('p', 'empty-state', 'Searching public groups…'));
+  try {
+    const search = $('study-group-search').value.trim();
+    const response = await fetch(`/api/study/groups/discover?search=${encodeURIComponent(search)}`, {
+      credentials: 'same-origin',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not search groups.');
+    if (!data.groups.length) {
+      root.replaceChildren(element('p', 'empty-state', 'No matching public groups. Try an invite code or start a new group.'));
+      return;
+    }
+    root.replaceChildren(...data.groups.map((group) => {
+      const item = element('article', 'study-group-discovery-card');
+      const copy = element('div', '');
+      copy.append(
+        element('strong', '', group.name),
+        element('p', '', group.description || 'No description.'),
+        element('span', 'file-meta-line', `${group.member_count} members`)
+      );
+      const join = element('button', 'small-button', 'Join group');
+      join.type = 'button';
+      join.addEventListener('click', async () => {
+        join.disabled = true;
+        try {
+          await runStudyGroupAction(`/api/study/groups/${group.id}/join`, { method: 'POST' }, `Joined ${group.name}.`);
+          $('study-group-discovery').classList.add('hidden');
+          await loadStudyGroups();
+          await loadStudyGroupDetail(group.id);
+        } catch (error) {
+          showMessage(error.message || 'Could not join this group.', 'error');
+          join.disabled = false;
+        }
+      });
+      item.append(copy, join);
+      return item;
+    }));
+  } catch (error) {
+    root.replaceChildren(element('p', 'empty-state', error.message || networkErrorMessage));
+  }
 }
 
 async function loadAdminUsers() {
@@ -1454,7 +2319,7 @@ function renderCourses(courses) {
     progress.append(progressHeader, progressTrack);
 
     const actions = element('div', 'course-actions');
-    if (['admin', 'editor', 'student'].includes(currentUser.role)) {
+    if (['admin', 'manager', 'editor', 'instructor', 'content_manager', 'student'].includes(currentUser.role)) {
       const uploadButton = element('button', 'small-button', 'Upload slides');
       uploadButton.type = 'button';
       uploadButton.addEventListener('click', () => openUpload(course));
@@ -1463,7 +2328,7 @@ function renderCourses(courses) {
     const filesButton = element('button', 'small-button small-button-muted', 'View files');
     filesButton.type = 'button';
     filesButton.addEventListener('click', () => toggleCourseFiles(course.id, card, filesButton));
-    const notebookButton = element('button', 'small-button notebook-open-button', '✦ Ask Gemini');
+    const notebookButton = element('button', 'small-button notebook-open-button', '✦ Ask Groq AI');
     notebookButton.type = 'button';
     notebookButton.addEventListener('click', () => openCourseNotebook(course.id));
     actions.append(filesButton, notebookButton);
@@ -1475,11 +2340,254 @@ function renderCourses(courses) {
   }));
 }
 
+function loadPersonalAiWorkspace() {
+  if (!currentUser?.id) {
+    $('personal-ai-status').textContent = 'Sign in to start a personal conversation.';
+    return;
+  }
+  const userId = String(currentUser.id);
+  if (personalAiStorageUserId !== userId) {
+    personalAiStorageUserId = userId;
+    personalAiConversations = [];
+    activePersonalAiConversationId = undefined;
+    personalAiStorageError = false;
+    try {
+      const saved = localStorage.getItem(`${PERSONAL_AI_STORAGE_PREFIX}${userId}`);
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (!Array.isArray(parsed)) throw new Error('Saved personal AI conversations are not in a supported format.');
+      personalAiConversations = parsed
+        .filter((conversation) =>
+          conversation &&
+          typeof conversation.id === 'string' &&
+          typeof conversation.title === 'string' &&
+          Array.isArray(conversation.messages)
+        )
+        .slice(0, PERSONAL_AI_MAX_CONVERSATIONS)
+        .map((conversation) => ({
+          id: conversation.id,
+          title: conversation.title.slice(0, 80),
+          updatedAt: Number(conversation.updatedAt) || 0,
+          messages: conversation.messages
+            .filter((message) =>
+              message &&
+              ['user', 'assistant'].includes(message.role) &&
+              typeof message.text === 'string'
+            )
+            .slice(-PERSONAL_AI_MAX_MESSAGES)
+            .map((message) => ({ role: message.role, text: message.text.slice(0, 5000) })),
+        }))
+        .sort((left, right) => right.updatedAt - left.updatedAt);
+    } catch (error) {
+      console.error('Could not load personal AI conversations:', error);
+      personalAiStorageError = true;
+    }
+  }
+  if (!personalAiConversations.some((conversation) => conversation.id === activePersonalAiConversationId)) {
+    activePersonalAiConversationId = personalAiConversations[0]?.id;
+  }
+  renderPersonalAiHistory();
+  renderPersonalAiConversation();
+  $('personal-ai-status').classList.remove('is-error');
+  $('personal-ai-status').textContent = personalAiStorageError
+    ? 'Could not load or save browser chat history. You can still chat, but it may not be saved.'
+    : activePersonalAiConversationId
+      ? 'Continue a saved chat or start a new conversation.'
+      : 'Ask anything. No course selection needed. AI can make mistakes.';
+}
+
+function persistPersonalAiConversations() {
+  if (!personalAiStorageUserId) return;
+  personalAiConversations.sort((left, right) => right.updatedAt - left.updatedAt);
+  personalAiConversations = personalAiConversations.slice(0, PERSONAL_AI_MAX_CONVERSATIONS);
+  try {
+    localStorage.setItem(
+      `${PERSONAL_AI_STORAGE_PREFIX}${personalAiStorageUserId}`,
+      JSON.stringify(personalAiConversations)
+    );
+    personalAiStorageError = false;
+  } catch (error) {
+    console.error('Could not save personal AI conversations:', error);
+    personalAiStorageError = true;
+    $('personal-ai-status').textContent = 'This chat is available for now, but the browser could not save it.';
+  }
+  renderPersonalAiHistory();
+  return !personalAiStorageError;
+}
+
+function renderPersonalAiHistory() {
+  const history = $('personal-ai-history');
+  history.replaceChildren();
+  personalAiConversations.forEach((conversation) => {
+    const row = element('div', `personal-ai-history-row${conversation.id === activePersonalAiConversationId ? ' is-active' : ''}`);
+    const open = element('button', 'personal-ai-history-open', conversation.title || 'New chat');
+    open.type = 'button';
+    open.setAttribute('aria-current', String(conversation.id === activePersonalAiConversationId));
+    open.addEventListener('click', () => {
+      activePersonalAiConversationId = conversation.id;
+      renderPersonalAiHistory();
+      renderPersonalAiConversation();
+      $('personal-ai-input').focus();
+    });
+    const remove = element('button', 'personal-ai-history-remove', '×');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `Delete conversation: ${conversation.title || 'New chat'}`);
+    remove.addEventListener('click', () => {
+      personalAiConversations = personalAiConversations.filter((item) => item.id !== conversation.id);
+      if (activePersonalAiConversationId === conversation.id) {
+        activePersonalAiConversationId = personalAiConversations[0]?.id;
+      }
+      persistPersonalAiConversations();
+      renderPersonalAiConversation();
+    });
+    row.append(open, remove);
+    history.append(row);
+  });
+}
+
+function renderPersonalAiConversation() {
+  const conversation = personalAiConversations.find((item) => item.id === activePersonalAiConversationId);
+  const messages = $('personal-ai-messages');
+  messages.replaceChildren();
+  const hasMessages = Boolean(conversation?.messages.length);
+  $('personal-ai-welcome').classList.toggle('hidden', hasMessages);
+  messages.classList.toggle('hidden', !hasMessages);
+  if (hasMessages) {
+    conversation.messages.forEach((message) => {
+      const bubble = element(
+        'article',
+        `personal-ai-message ${message.role === 'user' ? 'personal-ai-message-user' : 'personal-ai-message-assistant'}`
+      );
+      bubble.append(
+        element('span', 'personal-ai-message-author', message.role === 'user' ? 'You' : 'Logi AI'),
+        element('p', 'personal-ai-message-body', message.text)
+      );
+      messages.append(bubble);
+    });
+    messages.scrollTop = messages.scrollHeight;
+  }
+  $('personal-ai-send').disabled = personalAiSending;
+}
+
+function startPersonalAiConversation() {
+  const conversation = {
+    id: typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    title: 'New chat',
+    updatedAt: Date.now(),
+    messages: [],
+  };
+  personalAiConversations.unshift(conversation);
+  activePersonalAiConversationId = conversation.id;
+  persistPersonalAiConversations();
+  renderPersonalAiConversation();
+  $('personal-ai-status').classList.remove('is-error');
+  $('personal-ai-status').textContent = personalAiStorageError
+    ? 'This chat is available for now, but the browser could not save it.'
+    : 'Ask anything. No course selection needed. AI can make mistakes.';
+  $('personal-ai-input').focus();
+}
+
+function openPersonalAiChat() {
+  setDashboardTab('personal-ai-section');
+  loadPersonalAiWorkspace();
+  $('personal-ai-input').focus();
+}
+
+async function sendPersonalAiMessage(message) {
+  const question = message.trim();
+  if (!question || personalAiSending) return;
+  if (!personalAiStorageUserId) loadPersonalAiWorkspace();
+  let conversation = personalAiConversations.find((item) => item.id === activePersonalAiConversationId);
+  if (!conversation) {
+    startPersonalAiConversation();
+    conversation = personalAiConversations.find((item) => item.id === activePersonalAiConversationId);
+  }
+
+  conversation.messages.push({ role: 'user', text: question });
+  conversation.messages = conversation.messages.slice(-PERSONAL_AI_MAX_MESSAGES);
+  if (conversation.title === 'New chat') {
+    conversation.title = question.replace(/\s+/g, ' ').slice(0, 52) || 'New chat';
+  }
+  conversation.updatedAt = Date.now();
+  persistPersonalAiConversations();
+  renderPersonalAiConversation();
+  $('personal-ai-input').value = '';
+  $('personal-ai-status').classList.remove('is-error');
+  $('personal-ai-status').textContent = 'Logi AI is thinking…';
+  personalAiSending = true;
+  $('personal-ai-send').disabled = true;
+  $('personal-ai-new-chat').disabled = true;
+
+  const conversationId = conversation.id;
+  const history = conversation.messages.slice(0, -1).slice(-8)
+    .map(({ role, text }) => ({ role, text: text.slice(0, 1000) }));
+  const payload = { question, history };
+  while (history.length && new TextEncoder().encode(JSON.stringify(payload)).byteLength > 9000) {
+    history.shift();
+  }
+
+  try {
+    const response = await fetch('/api/study/assistant/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload),
+    });
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      if (response.status === 404) {
+        throw new Error('The Personal AI API is unavailable. Restart the LogiAuth server, then try again.');
+      }
+      throw new Error(`The Personal AI server returned an unexpected response (HTTP ${response.status}). Please try again.`);
+    }
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      console.error('Personal AI API returned invalid JSON:', parseError);
+      throw new Error('The Personal AI server returned an unreadable response. Please try again.');
+    }
+    if (!response.ok) {
+      const error = new Error(data.error || 'Could not answer your message.');
+      error.status = response.status;
+      error.retryable = data.retryable;
+      throw error;
+    }
+    const updatedConversation = personalAiConversations.find((item) => item.id === conversationId);
+    if (updatedConversation) {
+      updatedConversation.messages.push({ role: 'assistant', text: data.answer });
+      updatedConversation.messages = updatedConversation.messages.slice(-PERSONAL_AI_MAX_MESSAGES);
+      updatedConversation.updatedAt = Date.now();
+      persistPersonalAiConversations();
+    }
+    if (activePersonalAiConversationId === conversationId) {
+      $('personal-ai-status').classList.remove('is-error');
+      $('personal-ai-status').textContent = personalAiStorageError
+        ? `${data.model} · This chat is available for now, but the browser could not save it.`
+        : `${data.model} · This conversation is saved in your browser.`;
+      renderPersonalAiConversation();
+    }
+  } catch (error) {
+    console.error('Could not send personal AI message:', error);
+    if (activePersonalAiConversationId === conversationId) {
+      $('personal-ai-status').textContent = error.message || networkErrorMessage;
+      $('personal-ai-status').classList.add('is-error');
+    }
+  } finally {
+    personalAiSending = false;
+    $('personal-ai-send').disabled = false;
+    $('personal-ai-new-chat').disabled = false;
+  }
+}
+
 async function openCourseNotebook(courseId, initialQuestion = '') {
+  if (notebookRecognition) notebookRecognition.stop();
   const root = $('notebook-source-list');
   root.replaceChildren(element('li', 'empty-state', 'Loading course sources…'));
   $('notebook-messages').replaceChildren();
   $('notebook-status').textContent = 'Loading selected course…';
+  $('notebook-study-mode').value = 'explain';
   $('modal-notebook').classList.remove('hidden');
   notebookHistory = [];
 
@@ -1490,6 +2598,12 @@ async function openCourseNotebook(courseId, initialQuestion = '') {
 
     currentNotebook = data;
     currentNotebook.courseId = courseId;
+    currentStudySet = null;
+    $('study-set-panel').classList.add('hidden');
+    $('notebook-prompts').classList.remove('hidden');
+    $('notebook-messages').classList.remove('hidden');
+    $('notebook-form').classList.remove('hidden');
+    $('study-set-citations').replaceChildren();
     $('notebook-title').textContent = data.course.title;
     if (!data.sources.length) {
       root.replaceChildren(element('li', 'empty-state', 'Upload a PDF or PowerPoint to add the first source.'));
@@ -1502,7 +2616,12 @@ async function openCourseNotebook(courseId, initialQuestion = '') {
         checkbox.checked = index < 12;
         checkbox.setAttribute('aria-label', `Include ${source.original_name}`);
         checkbox.addEventListener('change', updateNotebookSelection);
-        const file = element('span', 'notebook-source-icon', source.mime_type === 'application/pdf' ? 'PDF' : 'PPT');
+        const sourceType = source.mime_type === 'application/pdf'
+          ? 'PDF'
+          : source.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            ? 'DOC'
+            : 'PPT';
+        const file = element('span', 'notebook-source-icon', sourceType);
         const details = element('span', 'notebook-source-details');
         details.append(
           element('strong', '', source.original_name),
@@ -1514,13 +2633,13 @@ async function openCourseNotebook(courseId, initialQuestion = '') {
     }
 
     $('notebook-status').textContent = data.aiConfigured
-      ? `${data.sources.length} course sources · Gemini will answer from the checked sources and cite the slide pages.`
-      : 'Add GEMINI_API_KEY to .env and restart LogiAuth to enable grounded AI chat.';
+      ? `${data.sources.length} course sources · Groq will answer from the checked sources and cite the slide pages.`
+      : 'Add GROQ_API_KEY to .env and restart LogiAuth to enable grounded AI chat.';
     appendNotebookMessage(
       'model',
       data.aiConfigured
         ? `This notebook is ready for **${data.course.title}**. Select up to 12 sources, then ask for explanations, summaries, study guides, or a quiz. I will cite the source pages I use.`
-        : 'Your sources are ready, but AI chat needs a Gemini API key. Add `GEMINI_API_KEY=your_key` to the project .env file, then restart the app.',
+        : 'Your sources are ready, but AI chat needs a Groq API key. Add `GROQ_API_KEY=your_key` to the project .env file, then restart the app.',
       []
     );
     updateNotebookSelection();
@@ -1545,10 +2664,11 @@ function updateNotebookSelection() {
   $('notebook-source-count').textContent = `${selected.length} selected · choose up to 12`;
   $('notebook-select-all').textContent = selected.length === currentNotebook?.sources.length ? 'Select none' : 'Select all';
   $('notebook-send-btn').disabled = !currentNotebook?.aiConfigured || selected.length === 0 || selected.length > 12;
+  $('build-study-set-btn').disabled = !currentNotebook?.aiConfigured || selected.length === 0 || selected.length > 12;
   if (selected.length > 12) {
     $('notebook-status').textContent = 'Select no more than 12 sources for one question.';
   } else if (currentNotebook?.aiConfigured) {
-    $('notebook-status').textContent = `${selected.length} source${selected.length === 1 ? '' : 's'} selected · Gemini answers with citations from these sources.`;
+    $('notebook-status').textContent = `${selected.length} source${selected.length === 1 ? '' : 's'} selected · Groq answers with citations from these sources.`;
   }
 }
 
@@ -1580,7 +2700,7 @@ function appendNotebookMessage(role, text, citations = []) {
   return bubble;
 }
 
-async function askNotebook(question, { appendQuestion = true } = {}) {
+async function askNotebook(question, { appendQuestion = true, mode = $('notebook-study-mode').value } = {}) {
   if (!currentNotebook) return;
   const sourceIds = selectedNotebookSourceIds();
   if (!sourceIds.length || sourceIds.length > 12) {
@@ -1600,7 +2720,7 @@ async function askNotebook(question, { appendQuestion = true } = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ question, sourceIds, history: notebookHistory }),
+      body: JSON.stringify({ question, sourceIds, history: notebookHistory, mode }),
     });
     const data = await response.json();
     thinking.remove();
@@ -1613,7 +2733,9 @@ async function askNotebook(question, { appendQuestion = true } = {}) {
     appendNotebookMessage('model', data.answer, data.citations || []);
     notebookHistory.push({ role: 'user', text: question }, { role: 'model', text: data.answer });
     notebookHistory = notebookHistory.slice(-8);
-    $('notebook-status').textContent = `${data.model} · citations verified against selected source text.`;
+    $('notebook-status').textContent = data.citations?.length
+      ? `${data.model} · citations verified against selected source text.`
+      : `${data.model} · answer provided, but no citation could be verified.`;
   } catch (error) {
     thinking.remove();
     const errorMessage = appendNotebookMessage('model', error.message || networkErrorMessage);
@@ -1623,7 +2745,7 @@ async function askNotebook(question, { appendQuestion = true } = {}) {
       retry.addEventListener('click', async () => {
         retry.disabled = true;
         errorMessage.remove();
-        await askNotebook(question, { appendQuestion: false });
+        await askNotebook(question, { appendQuestion: false, mode });
       });
       errorMessage.append(retry);
     }
@@ -1634,6 +2756,223 @@ async function askNotebook(question, { appendQuestion = true } = {}) {
       $('notebook-question').focus();
     }
   }
+}
+
+async function buildStudySet() {
+  if (!currentNotebook) return;
+  const sourceIds = selectedNotebookSourceIds();
+  if (!sourceIds.length || sourceIds.length > 12) {
+    $('notebook-status').textContent = 'Select between 1 and 12 sources to build a study set.';
+    return;
+  }
+
+  const buildButton = $('build-study-set-btn');
+  const panel = $('study-set-panel');
+  panel.classList.remove('hidden');
+  $('notebook-prompts').classList.add('hidden');
+  $('notebook-messages').classList.add('hidden');
+  $('notebook-form').classList.add('hidden');
+  $('study-set-content').replaceChildren(element('p', 'empty-state', 'Reading selected sources and building notes, flashcards, and a quiz…'));
+  $('study-set-citations').replaceChildren();
+  $('study-set-summary').textContent = 'Building a source-grounded study set…';
+  buildButton.disabled = true;
+
+  try {
+    const response = await fetch(`/api/study/courses/${currentNotebook.courseId}/study-set`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ sourceIds }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not build this study set.');
+    currentStudySet = data;
+    studyCardIndex = 0;
+    studyCardRevealed = false;
+    studyCardsReviewed = 0;
+    studyCardsAgain = 0;
+    studyQuizAnswers = Array(data.studySet.quiz.length).fill(null);
+    studyQuizSubmitted = false;
+    $('study-set-summary').textContent =
+      `${data.studySet.notes.length} key notes · ${data.studySet.flashcards.length} flashcards · ${data.studySet.quiz.length} quiz questions`;
+    renderStudySetTab('notes');
+    renderStudySetCitations(data.citations || []);
+    $('notebook-status').textContent = `${data.model} · citations verified against selected source text.`;
+  } catch (error) {
+    $('study-set-summary').textContent = error.message || networkErrorMessage;
+    $('study-set-content').replaceChildren(
+      element('p', 'empty-state', error.message || networkErrorMessage)
+    );
+    $('notebook-status').textContent = error.message || 'Could not build a study set.';
+  } finally {
+    buildButton.disabled = false;
+  }
+}
+
+function renderStudySetTab(tab) {
+  if (!currentStudySet) return;
+  document.querySelectorAll('.study-set-tab').forEach((button) => {
+    const active = button.dataset.studyTab === tab;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  const content = $('study-set-content');
+  if (tab === 'notes') {
+    const list = element('ol', 'study-notes-list');
+    list.append(...currentStudySet.studySet.notes.map((note) => element('li', '', note)));
+    content.replaceChildren(list);
+    return;
+  }
+  if (tab === 'cards') {
+    renderStudyFlashcard();
+    return;
+  }
+  renderStudyQuiz();
+}
+
+function renderStudyFlashcard() {
+  const cards = currentStudySet.studySet.flashcards;
+  const card = cards[studyCardIndex];
+  const content = $('study-set-content');
+  const layout = element('div', 'study-flashcard-layout');
+  const progress = element('p', 'study-card-progress',
+    `Card ${studyCardIndex + 1} of ${cards.length} · ${studyCardsReviewed} marked known · ${studyCardsAgain} to revisit`);
+  const flip = element('button', 'study-flashcard');
+  flip.type = 'button';
+  flip.setAttribute('aria-label', studyCardRevealed ? 'Show flashcard question' : 'Reveal flashcard answer');
+  flip.append(
+    element('span', 'study-flashcard-label', studyCardRevealed ? 'ANSWER' : 'QUESTION'),
+    element('strong', '', studyCardRevealed ? card.back : card.front),
+    element('span', 'study-flashcard-hint', 'Select to flip')
+  );
+  flip.addEventListener('click', () => {
+    studyCardRevealed = !studyCardRevealed;
+    renderStudyFlashcard();
+  });
+  const actions = element('div', 'study-card-actions');
+  const previous = element('button', 'small-button small-button-muted', 'Previous');
+  previous.type = 'button';
+  previous.disabled = studyCardIndex === 0;
+  previous.addEventListener('click', () => {
+    studyCardIndex -= 1;
+    studyCardRevealed = false;
+    renderStudyFlashcard();
+  });
+  const rating = element('button', 'small-button', studyCardRevealed ? 'Review again' : 'Reveal answer');
+  rating.type = 'button';
+  rating.addEventListener('click', () => {
+    if (!studyCardRevealed) {
+      studyCardRevealed = true;
+    } else {
+      studyCardsAgain += 1;
+      advanceStudyCard(cards.length);
+    }
+    renderStudyFlashcard();
+  });
+  const known = element('button', 'small-button', 'Got it');
+  known.type = 'button';
+  known.disabled = !studyCardRevealed;
+  known.addEventListener('click', () => {
+    studyCardsReviewed += 1;
+    advanceStudyCard(cards.length);
+    renderStudyFlashcard();
+  });
+  actions.append(previous, rating, known);
+  layout.append(progress, flip, actions);
+  content.replaceChildren(layout);
+}
+
+function advanceStudyCard(totalCards) {
+  studyCardIndex = (studyCardIndex + 1) % totalCards;
+  studyCardRevealed = false;
+}
+
+function renderStudyQuiz() {
+  const questions = currentStudySet.studySet.quiz;
+  const content = $('study-set-content');
+  const form = element('form', 'study-quiz-form');
+  questions.forEach((question, questionIndex) => {
+    const fieldset = element('fieldset', 'study-quiz-question');
+    fieldset.append(
+      element('legend', '', `${questionIndex + 1}. ${question.question}`)
+    );
+    question.options.forEach((option, optionIndex) => {
+      const label = element('label', 'study-quiz-option');
+      const input = element('input');
+      input.type = 'radio';
+      input.name = `study-question-${questionIndex}`;
+      input.value = String(optionIndex);
+      input.checked = studyQuizAnswers[questionIndex] === optionIndex;
+      input.disabled = studyQuizSubmitted;
+      input.addEventListener('change', () => {
+        studyQuizAnswers[questionIndex] = optionIndex;
+      });
+      label.append(input, element('span', '', option));
+      fieldset.append(label);
+    });
+    if (studyQuizSubmitted) {
+      const correct = studyQuizAnswers[questionIndex] === question.answerIndex;
+      fieldset.append(element(
+        'p',
+        `study-quiz-explanation ${correct ? 'is-correct' : 'is-incorrect'}`,
+        `${correct ? 'Correct.' : `Answer: ${question.options[question.answerIndex]}.`} ${question.explanation}`
+      ));
+    }
+    form.append(fieldset);
+  });
+
+  if (!studyQuizSubmitted) {
+    const submit = element('button', 'small-button study-quiz-submit', 'Check answers');
+    submit.type = 'submit';
+    submit.disabled = studyQuizAnswers.some((answer) => answer === null);
+    form.addEventListener('change', () => {
+      submit.disabled = studyQuizAnswers.some((answer) => answer === null);
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      studyQuizSubmitted = true;
+      const score = studyQuizAnswers.reduce((total, answer, index) =>
+        total + Number(answer === questions[index].answerIndex), 0);
+      $('study-set-summary').textContent = `Quiz result: ${score} of ${questions.length} correct. Review the explanations and source citations below.`;
+      renderStudyQuiz();
+    });
+    form.append(submit);
+  } else {
+    const retake = element('button', 'small-button small-button-muted study-quiz-retake', 'Try the quiz again');
+    retake.type = 'button';
+    retake.addEventListener('click', () => {
+      studyQuizAnswers = Array(questions.length).fill(null);
+      studyQuizSubmitted = false;
+      $('study-set-summary').textContent =
+        `${currentStudySet.studySet.notes.length} key notes · ${currentStudySet.studySet.flashcards.length} flashcards · ${questions.length} quiz questions`;
+      renderStudyQuiz();
+    });
+    form.append(retake);
+  }
+  content.replaceChildren(form);
+}
+
+function renderStudySetCitations(citations) {
+  const root = $('study-set-citations');
+  if (!citations.length) {
+    root.replaceChildren(element('p', 'study-set-citation-note', 'No exact source passages were verified for this set. Review answers against the selected course material.'));
+    return;
+  }
+  const heading = element('p', 'study-set-citation-note', 'Verified source passages');
+  const links = element('div', 'study-set-citation-links');
+  citations.forEach((citation, index) => {
+    const button = element('button', 'notebook-citation', `[${index + 1}] ${citation.fileName} · p. ${citation.page}`);
+    button.type = 'button';
+    button.title = citation.quote;
+    button.addEventListener('click', () => {
+      const source = currentNotebook?.sources.find((item) => Number(item.id) === Number(citation.sourceId));
+      if (!source) return showMessage('That source is no longer available.', 'error');
+      $('modal-notebook').classList.add('hidden');
+      openSlideReader(currentNotebook.courseId, source, citation.page);
+    });
+    links.append(button);
+  });
+  root.replaceChildren(heading, links);
 }
 
 async function toggleCourseFiles(courseId, card, button) {
@@ -1656,7 +2995,14 @@ async function toggleCourseFiles(courseId, card, button) {
         const fileLink = element('button', 'file-link', slide.original_name);
         fileLink.type = 'button';
         fileLink.addEventListener('click', () => openSlideReader(courseId, slide));
-        const meta = element('span', 'file-meta-line', `${formatBytes(slide.size_bytes)} · ${formatDate(slide.created_at)} · in-app preview`);
+        const previewType = slide.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          ? 'in-app text preview'
+          : slide.mime_type === 'text/plain'
+            ? 'transcript / text preview'
+            : slide.mime_type?.startsWith('audio/')
+              ? 'audio recording'
+              : 'in-app preview';
+        const meta = element('span', 'file-meta-line', `${formatBytes(slide.size_bytes)} · ${formatDate(slide.created_at)} · ${previewType}`);
         info.append(fileLink, meta);
         const completeButton = element(
           'button',
@@ -1670,6 +3016,14 @@ async function toggleCourseFiles(courseId, card, button) {
         );
         const actions = element('div', 'slide-actions');
         actions.append(completeButton);
+        if (slide.mime_type?.startsWith('audio/') && slide.can_delete && !slide.has_transcript) {
+          const transcribeButton = element('button', 'progress-toggle', 'Transcribe');
+          transcribeButton.type = 'button';
+          transcribeButton.addEventListener('click', () =>
+            transcribeCourseRecording(courseId, slide, transcribeButton, list)
+          );
+          actions.append(transcribeButton);
+        }
         const downloadLink = element('a', 'progress-toggle download-slide', 'Download');
         downloadLink.href = `/api/study/courses/${courseId}/slides/${slide.id}/download`;
         actions.append(downloadLink);
@@ -1758,6 +3112,7 @@ async function saveSlideNote(courseId, slideId, input, button) {
 
 function openSlideReader(courseId, slide, pageNumber = 1) {
   currentReadingSlide = { courseId, slide };
+  currentTextPages = null;
   $('reader-title').textContent = slide.original_name;
   $('slide-notes').value = slide.note || '';
   $('notes-count').textContent = `${$('slide-notes').value.length} / 10,000`;
@@ -1765,23 +3120,47 @@ function openSlideReader(courseId, slide, pageNumber = 1) {
   $('reader-complete-btn').classList.toggle('is-complete', slide.is_completed);
   const notice = $('reader-notice');
   const canvas = $('slide-canvas');
+  const textContent = $('reader-text-content');
   const download = $('reader-download');
   const pageToolbar = $('reader-page-toolbar');
+  $('reader-page').querySelector('.reader-audio')?.remove();
+  download.textContent = 'Download original file';
   canvas.classList.add('hidden');
+  textContent.classList.add('hidden');
+  textContent.replaceChildren();
   download.href = `/api/study/courses/${courseId}/slides/${slide.id}/download`;
   $('reader-page-count').textContent = '';
   $('reader-prev-page').disabled = true;
   $('reader-next-page').disabled = true;
   $('reader-page-count').textContent = 'Loading slide preview…';
   pageToolbar.classList.remove('hidden');
-  const extension = slide.original_name?.split('.').pop()?.toLowerCase();
+  const extension = slide.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ? 'docx'
+    : slide.original_name?.split('.').pop()?.toLowerCase();
+  if (slide.mime_type?.startsWith('audio/')) {
+    pageToolbar.classList.add('hidden');
+    notice.classList.add('hidden');
+    $('reader-page-count').textContent = 'Audio recording';
+    const audio = element('audio', 'reader-audio');
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = `/api/study/courses/${courseId}/slides/${slide.id}/view`;
+    $('reader-page').insertBefore(audio, download);
+    download.textContent = 'Download recording';
+    $('modal-reader').classList.remove('hidden');
+    $('slide-notes').focus();
+    return;
+  }
   notice.textContent = extension === 'pdf'
     ? 'Loading slide preview…'
-    : 'Preparing PowerPoint preview… The first open may take longer.';
+    : ['docx', 'txt'].includes(extension)
+      ? 'Loading document text…'
+      : 'Preparing PowerPoint preview… The first open may take longer.';
   notice.classList.remove('hidden');
   $('modal-reader').classList.remove('hidden');
   $('slide-notes').focus();
-  loadSlidePdf(courseId, slide, pageNumber);
+  if (['docx', 'txt'].includes(extension)) loadSlideText(courseId, slide, pageNumber);
+  else loadSlidePdf(courseId, slide, pageNumber);
 }
 
 function closeSlideReader() {
@@ -1791,9 +3170,57 @@ function closeSlideReader() {
   const loadingTask = currentPdfLoadingTask;
   currentPdfLoadingTask = null;
   currentPdfDocument = null;
+  currentTextPages = null;
   if (loadingTask) loadingTask.destroy().catch((error) => console.warn('Could not release slide preview:', error.message));
   $('slide-canvas').classList.add('hidden');
+  $('reader-text-content').classList.add('hidden');
+  $('reader-text-content').replaceChildren();
+  const audio = $('reader-page').querySelector('.reader-audio');
+  if (audio) {
+    audio.pause();
+    audio.remove();
+  }
   currentReadingSlide = null;
+}
+
+async function loadSlideText(courseId, slide, requestedPage = 1) {
+  const readingSlide = currentReadingSlide;
+  const notice = $('reader-notice');
+  const finishLoading = beginAppLoading('Opening your document…');
+  try {
+    const response = await fetch(
+      `/api/study/courses/${courseId}/slides/${slide.id}/text`,
+      { credentials: 'same-origin' }
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not open this document.');
+    if (currentReadingSlide !== readingSlide) return;
+    currentTextPages = data.pages;
+    const pageNumber = Math.max(1, Math.min(data.pages.length, Number(requestedPage) || 1));
+    await renderTextPage(pageNumber);
+  } catch (error) {
+    if (currentReadingSlide !== readingSlide) return;
+    notice.textContent = error.message || 'Could not display this document. Please try again.';
+    notice.classList.remove('hidden');
+    $('reader-page-count').textContent = 'Document unavailable';
+    showMessage(notice.textContent, 'error');
+  } finally {
+    finishLoading();
+  }
+}
+
+function renderTextPage(pageNumber) {
+  if (!currentTextPages?.length) return;
+  const page = currentTextPages.find((item) => item.page === pageNumber);
+  if (!page) return;
+  const textContent = $('reader-text-content');
+  const lines = page.text.split(/\r?\n/).filter(Boolean);
+  textContent.replaceChildren(...lines.map((line) => element('p', '', line)));
+  textContent.classList.remove('hidden');
+  $('reader-notice').classList.add('hidden');
+  $('reader-page-count').textContent = `Section ${pageNumber} of ${currentTextPages.length}`;
+  $('reader-prev-page').disabled = pageNumber <= 1;
+  $('reader-next-page').disabled = pageNumber >= currentTextPages.length;
 }
 
 async function loadSlidePdf(courseId, slide, requestedPage = 1) {
@@ -1868,8 +3295,16 @@ async function renderSlidePage(pageNumber) {
 }
 
 async function changeSlidePage(direction) {
-  if (!currentPdfDocument) return;
   const match = $('reader-page-count').textContent.match(/Page (\d+) of/);
+  if (currentTextPages) {
+    const textMatch = $('reader-page-count').textContent.match(/Section (\d+) of/);
+    if (!textMatch) return;
+    const nextTextPage = Number(textMatch[1]) + direction;
+    if (nextTextPage < 1 || nextTextPage > currentTextPages.length) return;
+    renderTextPage(nextTextPage);
+    return;
+  }
+  if (!currentPdfDocument) return;
   if (!match) return;
   const nextPage = Number(match[1]) + direction;
   if (nextPage < 1 || nextPage > currentPdfDocument.numPages) return;
@@ -2050,6 +3485,26 @@ async function renderStudySuggestions(suggestions) {
   }));
 }
 
+async function transcribeCourseRecording(courseId, slide, button, list) {
+  button.disabled = true;
+  button.textContent = 'Transcribing…';
+  try {
+    const response = await fetch(
+      `/api/study/courses/${courseId}/slides/${slide.id}/transcribe`,
+      { method: 'POST', credentials: 'same-origin' }
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not transcribe this recording.');
+    list.dataset.loaded = '';
+    await loadDashboard();
+    showMessage(data.existing ? 'A transcript for this recording is already in the course.' : 'Transcript added to the course sources.', 'success');
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = 'Transcribe';
+    showMessage(error.message || networkErrorMessage, 'error');
+  }
+}
+
 async function updateSlideProgress(courseId, slideId, completed) {
   try {
     const response = await fetch(`/api/study/courses/${courseId}/slides/${slideId}/progress`, {
@@ -2113,9 +3568,11 @@ $('login-form').addEventListener('submit', async (event) => {
       credentials: 'same-origin',
       body: JSON.stringify({ username, password }),
     });
-    const data = await r.json();
+    const data = await r.json().catch(() => ({}));
 
-    if (!r.ok) return showMessage(data.error || 'Login failed.', 'error');
+    if (!r.ok) {
+      return showMessage(data.error || `Sign-in failed with a server error (HTTP ${r.status}). Please try again.`, 'error');
+    }
 
     if (data.step === 'passkey-authentication') {
       showPasskeyStep('authentication', data.options);
@@ -2176,13 +3633,16 @@ $('forgot-password-form').addEventListener('submit', async (event) => {
 
 $('reset-password-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  showResetPasswordError('');
   if (!$('reset-password-form').checkValidity()) {
     $('reset-password-form').reportValidity();
     return;
   }
   const password = $('reset-new-password').value;
   if (password !== $('reset-confirm-password').value) {
-    showMessage('Those passwords do not match. Please check them and try again.', 'error');
+    const error = 'Those passwords do not match. Please check them and try again.';
+    showResetPasswordError(error);
+    showMessage(error, 'error');
     $('reset-confirm-password').focus();
     return;
   }
@@ -2196,16 +3656,46 @@ $('reset-password-form').addEventListener('submit', async (event) => {
       credentials: 'same-origin',
       body: JSON.stringify({
         token: passwordResetCode,
-        recoveryCode: $('reset-recovery-code').value.trim(),
         password,
       }),
     });
-    const data = await response.json();
-    if (!response.ok) return showMessage(data.error || 'Could not reset your password.', 'error');
+    if (!(response.headers.get('content-type') || '').includes('application/json')) {
+      const error = response.status === 404
+        ? 'Password reset is unavailable on the running server. Restart LogiAuth, refresh this page, and request a new reset code.'
+        : `The server returned an unexpected response (HTTP ${response.status}). Please try again.`;
+      showResetPasswordError(error);
+      showMessage(error, 'error');
+      return;
+    }
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      console.error('Password reset returned invalid JSON:', parseError);
+      const error = 'The server returned an unreadable response. Please restart LogiAuth and try again.';
+      showResetPasswordError(error);
+      showMessage(error, 'error');
+      return;
+    }
+    if (!response.ok) {
+      const error = data.error || 'Could not reset your password.';
+      showResetPasswordError(error);
+      showMessage(error, 'error');
+      if (data.code === 'expired' || data.code === 'attempt_limit' || data.code === 'invalid_code') {
+        passwordResetCode = '';
+        $('reset-password-form').classList.add('hidden');
+        $('otp-container').classList.remove('hidden');
+        $('resend-code-btn').classList.remove('hidden');
+        $('otp-title').textContent = 'Verify your email';
+        resetOtp();
+        otpSlots[0].focus();
+      }
+      return;
+    }
     passwordResetCode = '';
-    $('reset-recovery-code').value = '';
     $('reset-new-password').value = '';
     $('reset-confirm-password').value = '';
+    showResetPasswordError('');
     showLogin();
     showMessage(
       data.notificationSent
@@ -2213,11 +3703,17 @@ $('reset-password-form').addEventListener('submit', async (event) => {
         : `${data.message} The security notification email could not be sent.`,
       data.notificationSent ? 'success' : 'info'
     );
-  } catch {
+  } catch (error) {
+    console.error('Could not reset password:', error);
+    showResetPasswordError(networkErrorMessage);
     showMessage(networkErrorMessage, 'error');
   } finally {
     button.disabled = false;
   }
+});
+
+['reset-new-password', 'reset-confirm-password'].forEach((id) => {
+  $(id).addEventListener('input', () => showResetPasswordError(''));
 });
 
 $('recovery-codes-form').addEventListener('submit', async (event) => {
@@ -2265,9 +3761,11 @@ $('copy-recovery-codes-btn').addEventListener('click', async () => {
 
 $('reset-code-back-btn').addEventListener('click', () => {
   passwordResetCode = '';
+  showResetPasswordError('');
   $('reset-password-form').classList.add('hidden');
   $('otp-container').classList.remove('hidden');
   $('resend-code-btn').classList.remove('hidden');
+  $('otp-title').textContent = 'Verify your email';
   resetOtp();
   otpSlots[0].focus();
 });
@@ -2520,11 +4018,68 @@ const verifyOtp = async () => {
   if (value.length !== 6 || !/^\d{6}$/.test(value)) return;
 
   if (verificationPurpose === 'password-reset') {
-    passwordResetCode = value;
-    $('otp-container').classList.add('hidden');
-    $('resend-code-btn').classList.add('hidden');
-    $('reset-password-form').classList.remove('hidden');
-    $('reset-new-password').focus();
+    otpSlots.forEach((slot) => { slot.disabled = true; });
+    $('otp-title').textContent = 'Checking your email code…';
+    try {
+      const response = await fetch('/api/auth/verify-password-reset-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ token: value }),
+      });
+      if (!(response.headers.get('content-type') || '').includes('application/json')) {
+        console.error(`Password reset verification returned HTTP ${response.status} with a non-JSON response.`);
+        showMessage(
+          response.status === 404
+            ? 'Password reset verification is not available on the running server. Restart LogiAuth, then request a new reset code.'
+            : `The server returned an unexpected response (HTTP ${response.status}). Please restart LogiAuth and try again.`,
+          'error'
+        );
+        $('otp-title').textContent = 'Verify your email';
+        resetOtp();
+        otpSlots[0].focus();
+        return;
+      }
+      let data;
+      try {
+        data = await response.json();
+      } catch (error) {
+        console.error('Password reset code verification returned invalid JSON:', error);
+        showMessage('The server returned an unreadable response. Please try again.', 'error');
+        $('otp-title').textContent = 'Verify your email';
+        resetOtp();
+        otpSlots[0].focus();
+        return;
+      }
+      if (!response.ok) {
+        showMessage(data.error || 'That reset code could not be verified.', 'error');
+        $('otp-title').textContent = 'Verify your email';
+        otpContainer.classList.add('error');
+        clearTimeout(otpErrorTimer);
+        otpErrorTimer = setTimeout(() => {
+          otpContainer.classList.remove('error');
+          resetOtp();
+          otpSlots.forEach((slot) => { slot.disabled = false; });
+          if (verificationPurpose === 'password-reset') otpSlots[0].focus();
+        }, 600);
+        return;
+      }
+      if (verificationPurpose !== 'password-reset') return;
+      passwordResetCode = value;
+      $('otp-title').textContent = 'Choose a new password';
+      $('otp-container').classList.add('hidden');
+      $('resend-code-btn').classList.add('hidden');
+      $('reset-password-form').classList.remove('hidden');
+      $('reset-new-password').focus();
+    } catch (error) {
+      console.error('Could not verify password reset code:', error);
+      showMessage(networkErrorMessage, 'error');
+      $('otp-title').textContent = 'Verify your email';
+      resetOtp();
+      otpSlots[0].focus();
+    } finally {
+      otpSlots.forEach((slot) => { slot.disabled = false; });
+    }
     return;
   }
 
@@ -2660,6 +4215,7 @@ $('back-btn').addEventListener('click', () => {
     showRegister();
     $('register-username').focus();
   } else if (verificationPurpose === 'password-reset') {
+    verificationPurpose = 'login';
     showLogin();
     $('username').focus();
   } else {
@@ -2767,6 +4323,25 @@ const uploadPercent = $('upload-percent');
 const uploadStatus = $('upload-status');
 const closeUploadButton = document.querySelector('[data-close-modal]');
 let activeUploadRequest;
+let activeUploadProcessing = false;
+let activeRecording;
+let activeRecordingStream;
+let recordingChunks = [];
+let recordingTimer;
+let recordingStartPending = false;
+let activeYoutubeImport = false;
+
+function updateMediaIntakeControls() {
+  const recording = activeRecording?.state === 'recording';
+  const busy = Boolean(activeUploadRequest || activeUploadProcessing || recordingStartPending || activeYoutubeImport || recording);
+  const canRecord = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  dropzone.disabled = busy;
+  fileInput.disabled = busy;
+  $('show-youtube-import-btn').disabled = busy;
+  $('youtube-import-submit').disabled = busy;
+  $('record-lecture-btn').disabled = !canRecord || (busy && !recording);
+  closeUploadButton.disabled = busy || recording;
+}
 
 function setUploadProgress(percent) {
   const value = Math.max(0, Math.min(100, percent));
@@ -2786,13 +4361,20 @@ function openUpload(course) {
   setUploadProgress(0);
   uploadStatus.textContent = 'Preparing upload…';
   uploadStatus.className = '';
-  closeUploadButton.disabled = false;
+  $('media-intake-status').textContent = '';
+  $('youtube-import-form').classList.add('hidden');
+  $('record-lecture-btn').textContent = 'Record a lecture';
   uploadModal.classList.remove('hidden');
+  updateMediaIntakeControls();
   dropzone.focus();
 }
 
 function closeUpload() {
-  if (activeUploadRequest) return;
+  if (activeUploadRequest || activeUploadProcessing || recordingStartPending || activeYoutubeImport) return;
+  if (activeRecording?.state === 'recording') {
+    showMessage('Stop the recording before closing this dialog.', 'error');
+    return;
+  }
   uploadModal.classList.add('hidden');
   activeUploadCourse = null;
 }
@@ -2800,8 +4382,8 @@ function closeUpload() {
 function startSlideUpload(file) {
   if (!activeUploadCourse || !file) return;
   const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
-  if (!['.pdf', '.ppt', '.pptx'].includes(extension)) {
-    showMessage('Choose a PDF, PPT, or PPTX file.', 'error');
+  if (!['.pdf', '.ppt', '.pptx', '.docx', '.txt', '.mp3', '.wav', '.m4a', '.ogg', '.webm', '.aac', '.flac'].includes(extension)) {
+    showMessage('Choose a PDF, PowerPoint, Word, text, or supported audio file.', 'error');
     return;
   }
   if (file.size > 25 * 1024 * 1024) {
@@ -2814,20 +4396,19 @@ function startSlideUpload(file) {
   $('file-name').textContent = file.name;
   const fileType = extension.slice(1).toUpperCase();
   $('projectile-type').textContent = fileType;
-  $('upload-success-detail').textContent = `${file.name} saved to ${activeUploadCourse.title}.`;
+  $('upload-success-detail').textContent = `${file.name} added to ${activeUploadCourse.title}.`;
   uploadStatus.textContent = 'Uploading…';
   setUploadProgress(0);
   uploadCourt.classList.remove('swish', 'upload-error', 'scored');
   uploadCourt.classList.add('shooting');
-  closeUploadButton.disabled = true;
-  dropzone.disabled = true;
 
   const formData = new FormData();
   formData.append('slide', file);
   formData.append('title', file.name);
   const request = new XMLHttpRequest();
-  const finishLoading = beginAppLoading('Saving your slide…');
+  const finishLoading = beginAppLoading('Saving your study material…');
   activeUploadRequest = request;
+  updateMediaIntakeControls();
   request.open('POST', `/api/study/courses/${activeUploadCourse.id}/slides`);
   request.withCredentials = true;
   request.upload.addEventListener('progress', (event) => {
@@ -2845,8 +4426,7 @@ function startSlideUpload(file) {
       data = {};
     }
     if (request.status < 200 || request.status >= 300) {
-      closeUploadButton.disabled = false;
-      dropzone.disabled = false;
+      updateMediaIntakeControls();
       uploadCourt.classList.remove('shooting');
       uploadCourt.classList.add('upload-error');
       uploadStatus.textContent = data.error || 'Upload failed.';
@@ -2857,6 +4437,8 @@ function startSlideUpload(file) {
 
     uploadCourt.classList.remove('shooting');
     uploadCourt.classList.add('scored');
+    activeUploadProcessing = true;
+    updateMediaIntakeControls();
     const projectile = $('upload-projectile');
     let finished = false;
     const finishShot = async () => {
@@ -2864,13 +4446,37 @@ function startSlideUpload(file) {
       finished = true;
       clearTimeout(scoreTimer);
       setUploadProgress(100);
-      uploadStatus.textContent = 'Upload complete';
-      uploadStatus.className = 'upload-status-success';
-      closeUploadButton.disabled = false;
-      dropzone.disabled = false;
       $('upload-success').classList.remove('hidden');
+      const isAudio = file.type.startsWith('audio/') ||
+        ['.mp3', '.wav', '.m4a', '.ogg', '.webm', '.aac', '.flac'].includes(extension);
+      if (isAudio && data.slide?.id) {
+        uploadStatus.textContent = 'Saved · transcribing audio…';
+        $('upload-success-detail').textContent = `${file.name} saved. Creating a transcript for your course sources…`;
+        try {
+          const response = await fetch(
+            `/api/study/courses/${activeUploadCourse.id}/slides/${data.slide.id}/transcribe`,
+            { method: 'POST', credentials: 'same-origin' }
+          );
+          const transcriptData = await response.json();
+          if (!response.ok) throw new Error(transcriptData.error || 'Transcription could not be completed.');
+          uploadStatus.textContent = 'Upload and transcript complete';
+          uploadStatus.className = 'upload-status-success';
+          $('upload-success-detail').textContent = `${file.name} and its transcript are available in ${activeUploadCourse.title}.`;
+          showMessage('Recording saved and transcript added to course sources.', 'success');
+        } catch (error) {
+          uploadStatus.textContent = 'Recording saved · transcription needs a retry';
+          uploadStatus.className = 'upload-status-error';
+          $('upload-success-detail').textContent = `${file.name} is saved. Open course files and select Transcribe to retry.`;
+          showMessage(error.message || 'The recording was saved, but transcription failed.', 'error');
+        }
+      } else {
+        uploadStatus.textContent = 'Upload complete';
+        uploadStatus.className = 'upload-status-success';
+        showMessage('Study material uploaded successfully.', 'success');
+      }
+      activeUploadProcessing = false;
+      updateMediaIntakeControls();
       $('upload-done-btn').focus();
-      showMessage('Slide uploaded successfully.', 'success');
       await loadDashboard();
     };
     const scoreTimer = setTimeout(finishShot, 1300);
@@ -2880,8 +4486,7 @@ function startSlideUpload(file) {
   request.addEventListener('error', () => {
     finishLoading();
     activeUploadRequest = null;
-    closeUploadButton.disabled = false;
-    dropzone.disabled = false;
+    updateMediaIntakeControls();
     uploadCourt.classList.remove('shooting');
     uploadCourt.classList.add('upload-error');
     uploadStatus.textContent = 'Connection lost. Try again.';
@@ -2891,11 +4496,163 @@ function startSlideUpload(file) {
   request.send(formData);
 }
 
+function stopLectureRecording() {
+  if (activeRecording?.state === 'recording') activeRecording.stop();
+}
+
+$('record-lecture-btn').addEventListener('click', async () => {
+  const button = $('record-lecture-btn');
+  const status = $('media-intake-status');
+  if (activeRecording?.state === 'recording') {
+    button.disabled = true;
+    button.textContent = 'Saving recording…';
+    status.textContent = 'Finishing the recording…';
+    stopLectureRecording();
+    return;
+  }
+  if (!activeUploadCourse || !navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    status.textContent = 'This browser cannot record audio. Upload an audio file instead.';
+    return;
+  }
+  button.disabled = true;
+  recordingStartPending = true;
+  updateMediaIntakeControls();
+  try {
+    activeRecordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = [
+      'audio/webm;codecs=opus',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+    ].find((type) => MediaRecorder.isTypeSupported(type));
+    activeRecording = new MediaRecorder(
+      activeRecordingStream,
+      mimeType ? { mimeType } : undefined
+    );
+    recordingChunks = [];
+    let recordingBytes = 0;
+    let exceededSizeLimit = false;
+    activeRecording.addEventListener('dataavailable', (event) => {
+      if (!event.data.size) return;
+      recordingBytes += event.data.size;
+      if (recordingBytes > 25 * 1024 * 1024) {
+        exceededSizeLimit = true;
+        status.textContent = 'Recording reached the 25 MB upload limit and was stopped.';
+        stopLectureRecording();
+        return;
+      }
+      recordingChunks.push(event.data);
+    });
+    activeRecording.addEventListener('error', () => {
+      status.textContent = 'The browser could not record audio. Check microphone access and try again.';
+      window.clearTimeout(recordingTimer);
+      activeRecordingStream?.getTracks().forEach((track) => track.stop());
+      activeRecordingStream = null;
+      activeRecording = null;
+      recordingChunks = [];
+      recordingStartPending = false;
+      updateMediaIntakeControls();
+      button.textContent = 'Record a lecture';
+    }, { once: true });
+    activeRecording.addEventListener('stop', () => {
+      window.clearTimeout(recordingTimer);
+      activeRecordingStream?.getTracks().forEach((track) => track.stop());
+      activeRecordingStream = null;
+      const recorder = activeRecording;
+      activeRecording = null;
+      button.textContent = 'Record a lecture';
+      if (exceededSizeLimit) {
+        recordingChunks = [];
+        updateMediaIntakeControls();
+        return;
+      }
+      if (!recordingBytes) {
+        status.textContent = 'No audio was captured. Check microphone access and try again.';
+        updateMediaIntakeControls();
+        return;
+      }
+      const type = recorder.mimeType || mimeType || 'audio/webm';
+      const extension = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+      const file = new File(
+        recordingChunks,
+        `lecture-recording-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
+        { type }
+      );
+      recordingChunks = [];
+      status.textContent = 'Recording complete · uploading and transcribing…';
+      startSlideUpload(file);
+    }, { once: true });
+    activeRecording.start(1000);
+    recordingStartPending = false;
+    updateMediaIntakeControls();
+    button.textContent = 'Stop recording';
+    status.textContent = 'Recording… Stop when the lecture is finished. Maximum 10 minutes.';
+    recordingTimer = window.setTimeout(() => stopLectureRecording(), 10 * 60 * 1000);
+  } catch (error) {
+    recordingStartPending = false;
+    activeRecordingStream?.getTracks().forEach((track) => track.stop());
+    activeRecordingStream = null;
+    updateMediaIntakeControls();
+    status.textContent = error.name === 'NotAllowedError'
+      ? 'Microphone access was denied. Allow microphone access or upload an audio file.'
+      : 'Could not start recording. Check your microphone and try again.';
+    showMessage(status.textContent, 'error');
+  }
+});
+
+$('show-youtube-import-btn').addEventListener('click', () => {
+  const form = $('youtube-import-form');
+  const opening = form.classList.contains('hidden');
+  form.classList.toggle('hidden', !opening);
+  if (opening) $('youtube-video-url').focus();
+});
+
+$('youtube-import-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = $('youtube-import-form');
+  if (!form.checkValidity()) {
+    form.reportValidity();
+    return;
+  }
+  const button = $('youtube-import-submit');
+  const status = $('media-intake-status');
+  activeYoutubeImport = true;
+  updateMediaIntakeControls();
+  status.textContent = 'Reading video speech and creating a transcript…';
+  try {
+    const response = await fetch(`/api/study/courses/${activeUploadCourse.id}/youtube`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: $('youtube-video-url').value.trim(),
+        title: $('youtube-video-title').value.trim(),
+        confirmPermission: $('youtube-video-permission').checked,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not import this YouTube video.');
+    status.textContent = data.existing
+      ? 'This YouTube video already has a transcript in the course.'
+      : 'Transcript imported. It is now available in course sources.';
+    form.reset();
+    await loadDashboard();
+    showMessage(status.textContent, 'success');
+  } catch (error) {
+    status.textContent = error.message || networkErrorMessage;
+    showMessage(status.textContent, 'error');
+  } finally {
+    activeYoutubeImport = false;
+    updateMediaIntakeControls();
+  }
+});
+
 dropzone.addEventListener('click', () => {
   if (!activeUploadRequest) fileInput.click();
 });
 fileInput.addEventListener('change', () => {
-  startSlideUpload(fileInput.files[0]);
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  startSlideUpload(file);
 });
 uploadCourt.addEventListener('dragover', (event) => {
   event.preventDefault();
@@ -2907,7 +4664,9 @@ uploadCourt.addEventListener('dragleave', (event) => {
 uploadCourt.addEventListener('drop', (event) => {
   event.preventDefault();
   uploadCourt.classList.remove('drag-over');
-  if (!activeUploadRequest) startSlideUpload(event.dataTransfer.files[0]);
+  if (!activeUploadRequest && !activeUploadProcessing && !recordingStartPending && !activeYoutubeImport) {
+    startSlideUpload(event.dataTransfer.files[0]);
+  }
 });
 closeUploadButton.addEventListener('click', closeUpload);
 $('upload-done-btn').addEventListener('click', closeUpload);
@@ -2915,10 +4674,27 @@ uploadModal.addEventListener('click', (event) => {
   if (event.target === uploadModal) closeUpload();
 });
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    document.querySelectorAll('.study-group-overflow-menu, .study-group-plus-menu').forEach((menu) => {
+      menu.classList.add('hidden');
+    });
+    document.querySelectorAll('.study-group-menu-toggle, .study-group-plus-toggle').forEach((button) => {
+      button.setAttribute('aria-expanded', 'false');
+    });
+  }
   if (event.key === 'Escape' && !uploadModal.classList.contains('hidden')) closeUpload();
   if (event.key === 'Escape' && !$('modal-reader').classList.contains('hidden')) closeSlideReader();
   if (event.key === 'Escape' && !$('modal-coach').classList.contains('hidden')) $('modal-coach').classList.add('hidden');
   if (event.key === 'Escape' && !$('modal-notebook').classList.contains('hidden')) $('modal-notebook').classList.add('hidden');
+});
+document.addEventListener('click', (event) => {
+  if (event.target.closest('.study-group-menu-wrap, .study-group-plus-wrap')) return;
+  document.querySelectorAll('.study-group-overflow-menu, .study-group-plus-menu').forEach((menu) => {
+    menu.classList.add('hidden');
+  });
+  document.querySelectorAll('.study-group-menu-toggle, .study-group-plus-toggle').forEach((button) => {
+    button.setAttribute('aria-expanded', 'false');
+  });
 });
 
 $('close-reader-btn').addEventListener('click', closeSlideReader);
@@ -2926,9 +4702,15 @@ $('close-coach-btn').addEventListener('click', () => $('modal-coach').classList.
 $('modal-coach').addEventListener('click', (event) => {
   if (event.target === $('modal-coach')) $('modal-coach').classList.add('hidden');
 });
-$('close-notebook-btn').addEventListener('click', () => $('modal-notebook').classList.add('hidden'));
+$('close-notebook-btn').addEventListener('click', () => {
+  $('modal-notebook').classList.add('hidden');
+  if (notebookRecognition) notebookRecognition.stop();
+});
 $('modal-notebook').addEventListener('click', (event) => {
-  if (event.target === $('modal-notebook')) $('modal-notebook').classList.add('hidden');
+  if (event.target === $('modal-notebook')) {
+    $('modal-notebook').classList.add('hidden');
+    if (notebookRecognition) notebookRecognition.stop();
+  }
 });
 $('notebook-select-all').addEventListener('click', () => {
   if (!currentNotebook) return;
@@ -2942,11 +4724,73 @@ $('notebook-form').addEventListener('submit', (event) => {
   const question = $('notebook-question').value.trim();
   if (question) askNotebook(question);
 });
+$('build-study-set-btn').addEventListener('click', buildStudySet);
+$('study-set-back-btn').addEventListener('click', () => {
+  $('study-set-panel').classList.add('hidden');
+  $('notebook-prompts').classList.remove('hidden');
+  $('notebook-messages').classList.remove('hidden');
+  $('notebook-form').classList.remove('hidden');
+  $('notebook-question').focus();
+});
+document.querySelectorAll('.study-set-tab').forEach((button) => {
+  button.addEventListener('click', () => renderStudySetTab(button.dataset.studyTab));
+});
 $('notebook-prompts').addEventListener('click', (event) => {
   const button = event.target.closest('[data-prompt]');
   if (!button) return;
+  if (button.dataset.mode) $('notebook-study-mode').value = button.dataset.mode;
   $('notebook-question').value = button.dataset.prompt;
   $('notebook-question').focus();
+});
+$('notebook-voice-btn').addEventListener('click', () => {
+  if (notebookRecognition) {
+    notebookRecognition.stop();
+    return;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    $('notebook-status').textContent = 'Voice input is not supported by this browser. Type your question instead.';
+    return;
+  }
+  const recognition = new SpeechRecognition();
+  notebookRecognition = recognition;
+  recognition.lang = navigator.language || 'en-US';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  $('notebook-voice-btn').textContent = 'Stop listening';
+  $('notebook-voice-btn').setAttribute('aria-pressed', 'true');
+  $('notebook-status').textContent = 'Listening for your question…';
+  recognition.onresult = (event) => {
+    const transcript = event.results[0]?.[0]?.transcript?.trim();
+    if (!transcript) return;
+    const question = $('notebook-question');
+    question.value = `${question.value.trim()}${question.value.trim() ? ' ' : ''}${transcript}`.slice(0, 2000);
+    question.dispatchEvent(new Event('input', { bubbles: true }));
+    question.focus();
+    $('notebook-status').textContent = 'Voice input added. Review your question, then send it.';
+  };
+  recognition.onerror = (event) => {
+    const messages = {
+      'not-allowed': 'Microphone access was denied. Allow it in your browser settings or type your question.',
+      'no-speech': 'No speech was detected. Try again or type your question.',
+      network: 'Browser voice recognition is unavailable right now. Type your question instead.',
+    };
+    $('notebook-status').textContent = messages[event.error] || 'Voice recognition stopped. You can type your question instead.';
+  };
+  recognition.onend = () => {
+    if (notebookRecognition !== recognition) return;
+    notebookRecognition = null;
+    $('notebook-voice-btn').textContent = 'Speak your question';
+    $('notebook-voice-btn').setAttribute('aria-pressed', 'false');
+  };
+  try {
+    recognition.start();
+  } catch {
+    notebookRecognition = null;
+    $('notebook-voice-btn').textContent = 'Speak your question';
+    $('notebook-voice-btn').setAttribute('aria-pressed', 'false');
+    $('notebook-status').textContent = 'Could not start voice input. Check browser microphone permissions or type your question.';
+  }
 });
 $('notebook-question').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey) {
@@ -2960,9 +4804,26 @@ $('open-coach-slide').addEventListener('click', () => {
 });
 $('reader-prev-page').addEventListener('click', () => changeSlidePage(-1));
 $('reader-next-page').addEventListener('click', () => changeSlidePage(1));
-$('dashboard-ask-gemini').addEventListener('click', (event) => {
-  const courseId = Number(event.currentTarget.dataset.courseId);
-  if (courseId) openCourseNotebook(courseId);
+$('dashboard-ask-ai').addEventListener('click', (event) => {
+  openPersonalAiChat();
+});
+$('personal-ai-new-chat').addEventListener('click', startPersonalAiConversation);
+$('personal-ai-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const question = $('personal-ai-input').value.trim();
+  if (question) sendPersonalAiMessage(question);
+});
+$('personal-ai-input').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    $('personal-ai-form').requestSubmit();
+  }
+});
+$('personal-ai-suggestions').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-personal-ai-prompt]');
+  if (!button) return;
+  $('personal-ai-input').value = button.dataset.personalAiPrompt;
+  $('personal-ai-input').focus();
 });
 $('modal-reader').addEventListener('click', (event) => {
   if (event.target === $('modal-reader')) closeSlideReader();
@@ -3020,6 +4881,9 @@ $('logout-btn').addEventListener('click', async () => {
     const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
     if (!response.ok) throw new Error('Could not log out.');
     currentUser = null;
+    personalAiConversations = [];
+    activePersonalAiConversationId = undefined;
+    personalAiStorageUserId = undefined;
     clearInterval(activityHeartbeat);
     showLogin();
     showMessage('Logged out.', 'info');
@@ -3056,6 +4920,160 @@ $('logout-btn').addEventListener('click', async () => {
     showMessage(networkErrorMessage, 'error');
   }
 })();
+
+const connectionStatus = $('connection-status');
+function updateConnectionStatus() {
+  const offline = !navigator.onLine;
+  connectionStatus.classList.toggle('hidden', !offline);
+  connectionStatus.textContent = offline
+    ? 'Offline — account and study data need a connection.'
+    : '';
+}
+
+window.addEventListener('online', updateConnectionStatus);
+window.addEventListener('offline', updateConnectionStatus);
+updateConnectionStatus();
+
+const installAppButton = $('install-app-btn');
+const installAppStatus = $('install-app-status');
+const appIsInstalled = window.matchMedia('(display-mode: standalone)').matches ||
+  navigator.standalone === true;
+
+if (!appIsInstalled) {
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    installAppButton.classList.remove('hidden');
+    installAppStatus.classList.add('hidden');
+  });
+}
+
+installAppButton.addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return;
+
+  const promptEvent = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  installAppButton.disabled = true;
+  try {
+    await promptEvent.prompt();
+    const { outcome } = await promptEvent.userChoice;
+    installAppStatus.textContent = outcome === 'accepted'
+      ? 'LogiAuth is being installed.'
+      : 'Installation was dismissed. You can install later from your browser menu.';
+    installAppStatus.classList.remove('hidden');
+    installAppButton.classList.add('hidden');
+  } catch (error) {
+    console.error('Could not start LogiAuth installation:', error);
+    installAppStatus.textContent = 'Could not start installation. Try your browser menu instead.';
+    installAppStatus.classList.remove('hidden');
+    installAppButton.classList.add('hidden');
+  } finally {
+    installAppButton.disabled = false;
+  }
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  installAppButton.classList.add('hidden');
+  installAppStatus.textContent = 'LogiAuth is installed.';
+  installAppStatus.classList.remove('hidden');
+});
+
+function hideStudyGroupForms() {
+  $('create-group-form').classList.add('hidden');
+  $('join-group-form').classList.add('hidden');
+  $('study-group-discovery').classList.add('hidden');
+}
+
+$('show-create-group-btn').addEventListener('click', () => {
+  const form = $('create-group-form');
+  const wasHidden = form.classList.contains('hidden');
+  hideStudyGroupForms();
+  form.classList.toggle('hidden', !wasHidden);
+  if (wasHidden) $('new-group-name').focus();
+});
+
+$('show-find-groups-btn').addEventListener('click', () => {
+  const discovery = $('study-group-discovery');
+  const wasHidden = discovery.classList.contains('hidden');
+  hideStudyGroupForms();
+  discovery.classList.toggle('hidden', !wasHidden);
+  if (wasHidden) {
+    $('study-group-search').focus();
+    searchStudyGroups();
+  }
+});
+
+$('show-join-group-btn').addEventListener('click', () => {
+  const form = $('join-group-form');
+  const wasHidden = form.classList.contains('hidden');
+  hideStudyGroupForms();
+  form.classList.toggle('hidden', !wasHidden);
+  if (wasHidden) $('group-join-code').focus();
+});
+
+$('create-group-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('create-group-form').checkValidity()) {
+    $('create-group-form').reportValidity();
+    return;
+  }
+  const button = $('create-group-form').querySelector('button[type="submit"]');
+  const status = $('create-group-status');
+  button.disabled = true;
+  status.textContent = 'Creating group…';
+  try {
+    const data = await runStudyGroupAction('/api/study/groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: $('new-group-name').value,
+        description: $('new-group-description').value,
+        discoverable: $('new-group-discoverable').checked,
+      }),
+    }, 'Study group created.');
+    $('create-group-form').reset();
+    $('new-group-discoverable').checked = true;
+    hideStudyGroupForms();
+    await loadStudyGroups();
+    await loadStudyGroupDetail(data.group.id);
+  } catch (error) {
+    status.textContent = error.message || 'Could not create your group.';
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('join-group-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('join-group-form').checkValidity()) {
+    $('join-group-form').reportValidity();
+    return;
+  }
+  const button = $('join-group-form').querySelector('button[type="submit"]');
+  const status = $('join-group-status');
+  button.disabled = true;
+  status.textContent = 'Checking invite code…';
+  try {
+    await runStudyGroupAction('/api/study/groups/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ joinCode: $('group-join-code').value }),
+    }, 'Joined the study group.');
+    $('join-group-form').reset();
+    hideStudyGroupForms();
+    await loadStudyGroups();
+  } catch (error) {
+    status.textContent = error.message || 'Could not join this group.';
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('study-group-search-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  searchStudyGroups();
+});
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('/service-worker.js')

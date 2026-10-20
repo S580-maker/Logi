@@ -170,5 +170,106 @@ CREATE TABLE IF NOT EXISTS user_semester_courses (
     PRIMARY KEY (user_id, course_id)
 );
 
+CREATE TABLE IF NOT EXISTS study_groups (
+    id          BIGSERIAL PRIMARY KEY,
+    name        VARCHAR(120) NOT NULL,
+    description VARCHAR(500) NOT NULL DEFAULT '',
+    join_code   VARCHAR(8) NOT NULL UNIQUE,
+    discoverable BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by  INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_groups_discoverable_name
+    ON study_groups(discoverable, name);
+
+CREATE TABLE IF NOT EXISTS study_group_members (
+    group_id  BIGINT NOT NULL REFERENCES study_groups(id) ON DELETE CASCADE,
+    user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role      VARCHAR(12) NOT NULL DEFAULT 'member'
+              CHECK (role IN ('owner', 'member')),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_group_members_user
+    ON study_group_members(user_id, group_id);
+
+CREATE TABLE IF NOT EXISTS study_group_courses (
+    group_id  BIGINT NOT NULL REFERENCES study_groups(id) ON DELETE CASCADE,
+    course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    added_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, course_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_group_courses_course
+    ON study_group_courses(course_id, group_id);
+
+CREATE TABLE IF NOT EXISTS study_group_suggestions (
+    id         BIGSERIAL PRIMARY KEY,
+    group_id   BIGINT NOT NULL REFERENCES study_groups(id) ON DELETE CASCADE,
+    user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    title      VARCHAR(120) NOT NULL,
+    body       VARCHAR(2000) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_group_suggestions_group_created
+    ON study_group_suggestions(group_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS study_group_suggestion_comments (
+    id            BIGSERIAL PRIMARY KEY,
+    suggestion_id BIGINT NOT NULL REFERENCES study_group_suggestions(id) ON DELETE CASCADE,
+    user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    body          VARCHAR(1000) NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_group_suggestion_comments_post
+    ON study_group_suggestion_comments(suggestion_id, created_at);
+
+CREATE TABLE IF NOT EXISTS study_group_messages (
+    id         BIGSERIAL PRIMARY KEY,
+    group_id   BIGINT NOT NULL REFERENCES study_groups(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body       VARCHAR(2000) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_group_messages_group_created
+    ON study_group_messages(group_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS study_group_materials (
+    id            BIGSERIAL PRIMARY KEY,
+    group_id      BIGINT NOT NULL REFERENCES study_groups(id) ON DELETE CASCADE,
+    user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    original_name VARCHAR(255) NOT NULL,
+    storage_name  VARCHAR(255) NOT NULL UNIQUE,
+    mime_type     VARCHAR(127) NOT NULL,
+    size_bytes    BIGINT NOT NULL CHECK (size_bytes > 0),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_group_materials_group_created
+    ON study_group_materials(group_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS study_group_tasks (
+    id          BIGSERIAL PRIMARY KEY,
+    group_id    BIGINT NOT NULL REFERENCES study_groups(id) ON DELETE CASCADE,
+    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    task_type   VARCHAR(8) NOT NULL CHECK (task_type IN ('goal', 'task')),
+    title       VARCHAR(120) NOT NULL,
+    description VARCHAR(1000) NOT NULL DEFAULT '',
+    due_date    DATE,
+    status      VARCHAR(16) NOT NULL DEFAULT 'planned'
+                CHECK (status IN ('planned', 'in_progress', 'complete')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_group_tasks_group_created
+    ON study_group_tasks(group_id, created_at DESC);
+
 -- Seed a demo admin (password will be set via a one-off script)
 -- Run `node scripts/seed.js` after setup to create users with proper hashes.

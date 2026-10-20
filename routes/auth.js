@@ -34,6 +34,9 @@ const {
   loginLimiter,
   registrationLimiter,
   passwordResetLimiter,
+  passwordResetStartLimiter,
+  passwordResetVerificationLimiter,
+  emailCodeResendLimiter,
   passkeyVerificationLimiter,
 } = require('../middleware/rateLimit');
 
@@ -149,12 +152,6 @@ function hashRecoveryCode(code) {
     .digest('hex');
 }
 
-function hashesMatch(actualHash, expectedHash) {
-  const actual = Buffer.from(actualHash, 'hex');
-  const expected = Buffer.from(expectedHash, 'hex');
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
-}
-
 function createRecoveryCodes() {
   return Array.from({ length: 10 }, () => {
     const value = crypto.randomBytes(10).toString('hex').toUpperCase();
@@ -200,7 +197,7 @@ async function emailDomainCanReceiveMail(domain) {
 }
 
 /* ---------- Account registration ---------- */
-router.post('/register', registrationLimiter, validateRegistrationInput, async (req, res) => {
+router.post('/register', ...registrationLimiter, validateRegistrationInput, async (req, res) => {
   if (!isRegistrationEnabled()) {
     return res.status(403).json({ error: 'New account registration is currently disabled.' });
   }
@@ -323,7 +320,7 @@ router.post('/verify-registration', async (req, res) => {
 });
 
 /* ---------- Password + passkey sign-in ---------- */
-router.post('/login', loginLimiter, validateLoginInput, async (req, res) => {
+router.post('/login', ...loginLimiter, validateLoginInput, async (req, res) => {
   const { username, password } = req.body;
 
   try {
@@ -429,7 +426,7 @@ router.post('/login', loginLimiter, validateLoginInput, async (req, res) => {
   }
 });
 
-router.post('/verify-login-email-code', passkeyVerificationLimiter, async (req, res) => {
+router.post('/verify-login-email-code', ...passkeyVerificationLimiter, async (req, res) => {
   const pending = req.session.pendingPasskeyEmailVerification;
   const { token } = req.body || {};
   if (!pending) return res.status(400).json({ error: 'No sign-in code is waiting to be verified.' });
@@ -486,7 +483,7 @@ router.post('/verify-login-email-code', passkeyVerificationLimiter, async (req, 
 });
 
 /* ---------- Passkey enrollment and second-factor sign-in ---------- */
-router.post('/passkey/add/options', requireAuth, passkeyVerificationLimiter, async (req, res) => {
+router.post('/passkey/add/options', requireAuth, ...passkeyVerificationLimiter, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT id, username, email, role, password_hash FROM users WHERE id = $1',
@@ -508,7 +505,7 @@ router.post('/passkey/add/options', requireAuth, passkeyVerificationLimiter, asy
   }
 });
 
-router.post('/passkey/register/verify', passkeyVerificationLimiter, async (req, res) => {
+router.post('/passkey/register/verify', ...passkeyVerificationLimiter, async (req, res) => {
   const isAddition = Boolean(req.session.pendingPasskeyAddition);
   const pending = req.session.pendingPasskeyAddition || req.session.pendingPasskeyEnrollment;
   const response = req.body?.credential;
@@ -620,7 +617,7 @@ router.post('/passkey/register/verify', passkeyVerificationLimiter, async (req, 
   }
 });
 
-router.post('/passkey/authenticate/verify', passkeyVerificationLimiter, async (req, res) => {
+router.post('/passkey/authenticate/verify', ...passkeyVerificationLimiter, async (req, res) => {
   const pending = req.session.pendingPasskeyAuthentication;
   const response = req.body?.credential;
   if (!pending) return res.status(400).json({ error: 'Your sign-in has expired. Please try again.' });
@@ -703,7 +700,7 @@ router.post('/passkey/authenticate/verify', passkeyVerificationLimiter, async (r
   }
 });
 
-router.post('/recovery-codes', requireAuth, passwordResetLimiter, async (req, res) => {
+router.post('/recovery-codes', requireAuth, ...passwordResetLimiter, async (req, res) => {
   const password = req.body?.password;
   if (typeof password !== 'string' || password.length < 6 || password.length > 128) {
     return res.status(400).json({ error: 'Enter your account password to generate recovery codes.' });
@@ -761,7 +758,7 @@ router.post('/recovery-codes', requireAuth, passwordResetLimiter, async (req, re
 });
 
 /* ---------- Password recovery ---------- */
-router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
+router.post('/forgot-password', ...passwordResetStartLimiter, async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const genericResponse = {
     message: 'If an account uses that email, a password reset code is on its way.',
@@ -771,6 +768,7 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
     return res.json(genericResponse);
   }
 
+  delete req.session.pendingPasswordReset;
   try {
     const result = await pool.query(
       'SELECT id, username, email FROM users WHERE email = $1',
@@ -811,58 +809,109 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
   }
 });
 
-router.post('/reset-password', passwordResetLimiter, async (req, res) => {
+router.post('/verify-password-reset-code', ...passwordResetVerificationLimiter, async (req, res) => {
   const pending = req.session.pendingPasswordReset;
-  const { token, recoveryCode, password } = req.body || {};
+  const { token } = req.body || {};
   if (!pending) return res.status(400).json({ error: 'Request a new password reset code first.' });
   if (Date.now() > pending.otpExpiresAt) {
-    delete req.session.pendingPasswordReset;
-    return res.status(401).json({ error: 'That reset code has expired. Request a new one.' });
+    pending.otpVerified = false;
+    return res.status(401).json({
+      code: 'expired',
+      error: 'That reset code has expired. Resend a new code to continue.',
+    });
   }
   if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
-    delete req.session.pendingPasswordReset;
-    return res.status(429).json({ error: 'Too many incorrect codes. Request a new one.' });
+    pending.otpVerified = false;
+    return res.status(429).json({
+      code: 'attempt_limit',
+      error: 'Too many incorrect codes. Resend a new code to continue.',
+    });
+  }
+  if (typeof token !== 'string' || !/^\d{6}$/.test(token)) {
+    return res.status(400).json({ error: 'Enter the 6-digit code from your password reset email.' });
+  }
+  if (pending.isDummy || !otpMatches(pending.otpHash, token)) {
+    pending.otpAttempts += 1;
+    pending.otpVerified = false;
+    if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
+      return res.status(429).json({
+        code: 'attempt_limit',
+        error: 'Too many incorrect codes. Resend a new code to continue.',
+      });
+    }
+    return res.status(401).json({ error: 'That reset code is incorrect. Check the newest email code and try again.' });
+  }
+
+  pending.otpVerified = true;
+  return res.json({ verified: true });
+});
+
+router.post('/reset-password', ...passwordResetVerificationLimiter, async (req, res) => {
+  const pending = req.session.pendingPasswordReset;
+  const { token, password } = req.body || {};
+  if (!pending) return res.status(400).json({ error: 'Request a new password reset code first.' });
+  if (Date.now() > pending.otpExpiresAt) {
+    pending.otpVerified = false;
+    return res.status(401).json({
+      code: 'expired',
+      error: 'That reset code has expired. Resend a new code to continue.',
+    });
+  }
+  if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
+    pending.otpVerified = false;
+    return res.status(429).json({
+      code: 'attempt_limit',
+      error: 'Too many incorrect codes. Resend a new code to continue.',
+    });
+  }
+  if (!pending.otpVerified) {
+    return res.status(403).json({ error: 'Verify your email code before setting a new password.' });
   }
   if (typeof token !== 'string' || !/^\d{6}$/.test(token) ||
-      typeof recoveryCode !== 'string' || !/^[\da-fA-F\s-]{20,40}$/.test(recoveryCode) ||
       typeof password !== 'string' || password.length < 6 || password.length > 128) {
     return res.status(400).json({
-      error: 'Enter the email code, one unused recovery code, and a password of 6-128 characters.',
+      error: 'Enter the 6-digit email code and a password of 6-128 characters.',
     });
   }
   if (pending.isDummy) {
     pending.otpAttempts += 1;
-    return res.status(401).json({ error: 'That reset code is incorrect.' });
+    pending.otpVerified = false;
+    if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
+      return res.status(429).json({
+        code: 'attempt_limit',
+        error: 'Too many incorrect codes. Resend a new code to continue.',
+      });
+    }
+    return res.status(401).json({
+      code: 'invalid_code',
+      error: 'That reset code is incorrect. Verify the newest email code and try again.',
+    });
   }
   if (!otpMatches(pending.otpHash, token)) {
     pending.otpAttempts += 1;
-    return res.status(401).json({ error: 'That reset code is incorrect.' });
+    pending.otpVerified = false;
+    if (pending.otpAttempts >= OTP_MAX_ATTEMPTS) {
+      return res.status(429).json({
+        code: 'attempt_limit',
+        error: 'Too many incorrect codes. Resend a new code to continue.',
+      });
+    }
+    return res.status(401).json({
+      code: 'invalid_code',
+      error: 'That reset code is incorrect. Verify the newest email code and try again.',
+    });
   }
 
   let client;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
-    await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [pending.userId]);
-    const codesResult = await client.query(
-      `SELECT id, code_hash
-       FROM user_recovery_codes
-       WHERE user_id = $1 AND used_at IS NULL
-       FOR UPDATE`,
-      [pending.userId]
-    );
-    const candidateHash = hashRecoveryCode(recoveryCode);
-    const matchingRecoveryCode = codesResult.rows.find((row) => (
-      hashesMatch(candidateHash, row.code_hash)
-    ));
-    if (!matchingRecoveryCode) {
+    const userLock = await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [pending.userId]);
+    if (!userLock.rowCount) {
       await client.query('ROLLBACK');
-      pending.otpAttempts += 1;
-      return res.status(401).json({
-        error: 'The email code or recovery code is incorrect. Check both and try again.',
-      });
+      delete req.session.pendingPasswordReset;
+      return res.status(400).json({ error: 'This account is no longer available. Request a new password reset code.' });
     }
-
     await client.query(
       'DELETE FROM user_recovery_codes WHERE user_id = $1',
       [pending.userId]
@@ -902,7 +951,7 @@ router.post('/reset-password', passwordResetLimiter, async (req, res) => {
 });
 
 /* ---------- Resend registration or password reset code ---------- */
-router.post('/resend-code', passwordResetLimiter, async (req, res) => {
+router.post('/resend-code', ...emailCodeResendLimiter, async (req, res) => {
   const pending = req.session.pendingRegistration ||
     req.session.pendingPasswordReset ||
     req.session.pendingPasskeyEmailVerification;
@@ -949,6 +998,7 @@ router.post('/resend-code', passwordResetLimiter, async (req, res) => {
         otpExpiresAt: Date.now() + PASSWORD_RESET_TTL_MS,
         otpAttempts: 0,
         otpLastSentAt: Date.now(),
+        otpVerified: false,
       };
     }
     res.json({

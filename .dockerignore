@@ -1,0 +1,17 @@
+.env
+.env.*
+.git
+.github
+.expo
+node_modules
+mobile
+logi
+storage
+test
+coverage
+npm-debug.log*
+*.log
+DEPLOYMENT.md
+Start-LogiAuth.bat
+Start-LogiAuth.ps1
+tsconfig.json

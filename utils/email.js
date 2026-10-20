@@ -53,8 +53,8 @@ async function sendRegistrationCode(email, username, code) {
 async function sendPasswordResetCode(email, username, code) {
   await sendToRecipient(email, {
     subject: 'Reset your LogiAuth password',
-    text: `Hello ${username},\n\nYour LogiAuth password reset email code is ${code}. It expires in 10 minutes. You will also need one of your saved recovery codes to reset your password. If you did not request this, ignore this email and keep your recovery codes safe.`,
-    html: `<div style="font-family:Arial,sans-serif;color:#17191f"><p>Hello ${escapeHtml(username)},</p><p>Your LogiAuth password reset email code is:</p><p style="font-size:32px;font-weight:bold;letter-spacing:8px">${code}</p><p>This code expires in 10 minutes. To complete the reset, you must also enter one of your saved recovery codes. If you did not request this, ignore this email and keep your recovery codes safe.</p></div>`,
+    text: `Hello ${username},\n\nYour LogiAuth password reset email code is ${code}. It expires in 10 minutes. Enter this code in LogiAuth to choose a new password. If you did not request this, ignore this email.`,
+    html: `<div style="font-family:Arial,sans-serif;color:#17191f"><p>Hello ${escapeHtml(username)},</p><p>Your LogiAuth password reset email code is:</p><p style="font-size:32px;font-weight:bold;letter-spacing:8px">${code}</p><p>This code expires in 10 minutes. Enter it in LogiAuth to choose a new password. If you did not request this, ignore this email.</p></div>`,
   });
 }
 

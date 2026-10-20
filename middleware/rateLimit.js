@@ -12,46 +12,64 @@ function createStore(prefix) {
   });
 }
 
-// 5 login attempts per 15 minutes per IP
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  ...(redisClient ? { store: createStore('logiauth:limit:login:') } : {}),
-  message: { error: 'Too many login attempts. Try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+function createLimiters(prefix, max, message) {
+  const options = {
+    windowMs: 15 * 60 * 1000,
+    max,
+    message: { error: message },
+    standardHeaders: true,
+    legacyHeaders: false,
+  };
+  if (!redisClient) return [rateLimit(options)];
 
-const registrationLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  ...(redisClient ? { store: createStore('logiauth:limit:registration:') } : {}),
-  message: { error: 'Too many account creation attempts. Try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+  return [
+    rateLimit(options),
+    rateLimit({
+      ...options,
+      store: createStore(prefix),
+      passOnStoreError: true,
+    }),
+  ];
+}
 
-const passwordResetLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  ...(redisClient ? { store: createStore('logiauth:limit:password-reset:') } : {}),
-  message: { error: 'Too many password reset attempts. Try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const passkeyVerificationLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  ...(redisClient ? { store: createStore('logiauth:limit:passkey:') } : {}),
-  message: { error: 'Too many passkey attempts. Please wait and try again.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const loginLimiter = createLimiters('logiauth:limit:login:', 5, 'Too many login attempts. Try again later.');
+const registrationLimiter = createLimiters(
+  'logiauth:limit:registration:',
+  5,
+  'Too many account creation attempts. Try again later.'
+);
+const passwordResetLimiter = createLimiters(
+  'logiauth:limit:password-reset:',
+  5,
+  'Too many password reset attempts. Try again later.'
+);
+const passwordResetStartLimiter = createLimiters(
+  'logiauth:limit:password-reset:start:',
+  5,
+  'Too many password reset requests. Try again later.'
+);
+const passwordResetVerificationLimiter = createLimiters(
+  'logiauth:limit:password-reset:verify:',
+  10,
+  'Too many password reset attempts. Try again later.'
+);
+const emailCodeResendLimiter = createLimiters(
+  'logiauth:limit:email-code:resend:',
+  5,
+  'Too many code resend requests. Try again later.'
+);
+const passkeyVerificationLimiter = createLimiters(
+  'logiauth:limit:passkey:',
+  10,
+  'Too many passkey attempts. Please wait and try again.'
+);
 
 module.exports = {
   loginLimiter,
   registrationLimiter,
   passwordResetLimiter,
+  passwordResetStartLimiter,
+  passwordResetVerificationLimiter,
+  emailCodeResendLimiter,
   passkeyVerificationLimiter,
 };
